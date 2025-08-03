@@ -63,7 +63,7 @@ Download the evaluation checkpoints (zip file) from [OneDrive](https://1drv.ms/u
 Before training CcGAN-AVAR, first train the auxiliary ResNet18 regression model by executing the `.sh` scripts in `./config/aux_reg`. Ensure the root path and data path are correctly configured.
 
 ### (2) CcGAN-AVAR training
-We provide the `.sh` file for training CcGAN-AVAR-S or CcGAN-AVAR-H on each dataset in `./config`.
+We provide the `.sh` file for training CcGAN-AVAR-S or CcGAN-AVAR-H on each dataset in `./config`. Ensure the root path and data path are correctly configured.
 
 --------------------------------------------------------
 ## Sampling and Evaluation
