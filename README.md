@@ -50,11 +50,21 @@
 
 
 
+
+
+--------------------------------------------------------
+## Preparation (Required!)
+Download the evaluation checkpoints (zip file) from [OneDrive](https://1drv.ms/u/s!Arj2pETbYnWQvOQFAot2lzSWwOEgSQ?e=ZokUe5) or [BaiduYun](https://pan.baidu.com/s/1eIUieSpsFCay21ZrEjTCAA?pwd=d3e4), then extract the contents to `./CcGAN-AVAR/evaluation/eval_ckpts`.
+
 --------------------------------------------------------
 ## Training
 
 
+### (1) Auxiliary regression model training
 
+
+
+### (2) CcGAN-AVAR training
 
 
 
