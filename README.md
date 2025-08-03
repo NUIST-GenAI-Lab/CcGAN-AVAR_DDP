@@ -7,7 +7,7 @@
 |---|---|
 | OS | Ubuntu 22.04 |
 | CUDA  | 12.8 |
-| MATLAB | R2025a |
+| MATLAB | R2021 |
 | Python | 3.12.7 |
 | numpy | 1.26.4 |
 | scipy | 1.13.1 |
@@ -26,7 +26,8 @@
 [RC-49_64x64_BaiduYun_link](https://pan.baidu.com/s/1Odd02zraZI0XuqIj5UyOAw?pwd=bzjf) <br />
 
 #### RC-49-I (64x64)
-
+[RC-49-I_64x64_OneDrive_link](https://1drv.ms/u/c/907562db44a4f6b8/EbJrU1Vc_p9BjgSOeKS8QUgBOZLbGTBsnShRGLXlRC516g?e=scNBPW) <br />
+[RC-49-I_64x64_BaiduYun_link](https://pan.baidu.com/s/1DgVy_AdQgFVVRbmTleggrQ?pwd=qfud) <br />
 
 ### The preprocessed UTKFace Dataset (h5 file)
 #### UTKFace (64x64)
@@ -49,14 +50,16 @@
 
 
 
+--------------------------------------------------------
+## Training
 
 
 
 
 
 
-
-
+--------------------------------------------------------
+## Sampling and Evaluation
 
 
 
