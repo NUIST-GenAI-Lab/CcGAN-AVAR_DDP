@@ -1,5 +1,13 @@
 # [Imbalance-Robust and Sampling-Efficient Continuous Conditional GANs via Adaptive Vicinity and Auxiliary Regularization](https://arxiv.org/abs/XXXX)
 
+--------------------------------------------------------
+## To do list:  
+- [x] Support training CcGAN on multiple datasets with a unified framework. 
+- [x] Support training with mixed precision based on Accelerate. 
+- [x] Support Exponential Moving Average (EMA). Not compitible with self-attention in SAGAN and BigGAN!
+- [x] Support Graident norm clip.
+- [x] Support BigGAN and BigGAN-deep architectures. 
+- [ ] Support multi-GPU training.
 
 --------------------------------------------------------
 ## Software Requirements
