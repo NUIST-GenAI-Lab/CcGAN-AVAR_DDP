@@ -54,27 +54,27 @@
 
 --------------------------------------------------------
 ## Preparation (Required!)
-Download the evaluation checkpoints (zip file) from [OneDrive](https://1drv.ms/u/s!Arj2pETbYnWQvOQFAot2lzSWwOEgSQ?e=ZokUe5) or [BaiduYun](https://pan.baidu.com/s/1eIUieSpsFCay21ZrEjTCAA?pwd=d3e4), then extract the contents to `./CcGAN-AVAR/evaluation/eval_ckpts`.
+Download the evaluation checkpoints (zip file) from [OneDrive](https://1drv.ms/u/c/907562db44a4f6b8/ESMAINc9fEBPlMirWXd0VbsBWHJQ5s3AWBK5BydZ10On0Q?e=tgFZpW) or [BaiduYun](https://pan.baidu.com/s/1eIUieSpsFCay21ZrEjTCAA?pwd=d3e4), then extract the contents to `./CcGAN-AVAR/evaluation/eval_ckpts`.
 
 --------------------------------------------------------
 ## Training
 
-
 ### (1) Auxiliary regression model training
-
-
+Before training CcGAN-AVAR, first train the auxiliary ResNet18 regression model by executing the `.sh` scripts in `./config/aux_reg`. Ensure the root path and data path are correctly configured.
 
 ### (2) CcGAN-AVAR training
-
-
+We provide the `.sh` file for training CcGAN-AVAR-S or CcGAN-AVAR-H on each dataset in `./config`.
 
 --------------------------------------------------------
 ## Sampling and Evaluation
 
+<!------------------------------------>
+### (1) SFID, Diversity, and Label Score
+After the training, the sampling usually automatically starts. Ensure that the `--do_eval` flag is enabled. 
 
-
-
-
+<!------------------------------------>
+### (2) NIQE
+To enable NIQE calculation, set both `--dump_fake_for_niqe` and `--niqe_dump_path` to output generated images to your specified directory. Implementation details are available at: https://github.com/UBCDingXin/CCDM
 
 --------------------------------------------------------
 ## Acknowledge
