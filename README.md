@@ -6,7 +6,7 @@
 - [x] Support DCGAN, SNGAN, SAGAN, BigGAN and BigGAN-deep architectures.
 - [x] Support three types of label embeeding: CcGAN's ILI, Sinusoidal, and Gaussian Fourier.
 - [x] Support mixed precision training based on Accelerate. 
-- [x] Support Exponential Moving Average (EMA). Not compitible with self-attention in SAGAN and BigGAN!
+- [x] Support Exponential Moving Average (EMA). Not compatible with self-attention in SAGAN and BigGAN!
 - [ ] Support multi-GPU training.
 
 --------------------------------------------------------
