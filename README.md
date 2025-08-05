@@ -1,4 +1,4 @@
-# [Imbalance-Robust and Sampling-Efficient Continuous Conditional GANs via Adaptive Vicinity and Auxiliary Regularization](https://arxiv.org/abs/XXXX)
+# [Imbalance-Robust and Sampling-Efficient Continuous Conditional GANs via Adaptive Vicinity and Auxiliary Regularization](https://arxiv.org/abs/2508.01725)
 
 --------------------------------------------------------
 ## To do list:  
