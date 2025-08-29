@@ -1,6 +1,17 @@
 # [Imbalance-Robust and Sampling-Efficient Continuous Conditional GANs via Adaptive Vicinity and Auxiliary Regularization](https://arxiv.org/abs/2508.01725)
 
 --------------------------------------------------------
+If you use this code, please cite
+```text
+@article{ding2025imbalance,
+  title={Imbalance-Robust and Sampling-Efficient Continuous Conditional GANs via Adaptive Vicinity and Auxiliary Regularization},
+  author={Ding, Xin and Chen, Yun and Wang, Yongwei and Zhang, Kao and Zhang, Sen and Cao, Peibei and Wang, Xiangxue},
+  journal={arXiv preprint arXiv:2508.01725},
+  year={2025}
+}
+```
+
+--------------------------------------------------------
 ## To do list:  
 - [x] Support training CcGAN and CcGAN-AVAR on multiple datasets with a unified framework. 
 - [x] Support DCGAN, SNGAN, SAGAN, BigGAN and BigGAN-deep architectures.
