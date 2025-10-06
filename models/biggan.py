@@ -1,8 +1,6 @@
 '''
 The network for BigGAN
 
-refer to 
-
 https://github.com/POSTECH-CVLab/PyTorch-StudioGAN
 
 https://github.com/ajbrock/BigGAN-PyTorch
@@ -556,13 +554,13 @@ if __name__ == "__main__":
         trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
         return {'Total': total_num, 'Trainable': trainable_num}
 
-    IMG_SIZE=192
+    IMG_SIZE=128
     NC=3
-    DIM_Z=140
+    DIM_Z=120
     DIM_Y=128
 
     netG = biggan_generator(dim_z=DIM_Z, dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, gene_ch=64, ch_multi=None, use_sn=True, use_attn=True, g_init="ortho").cuda() # parameters
-    netD = biggan_discriminator(dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, disc_ch=64, ch_multi=None, use_sn=True, use_attn=True, d_init="ortho", use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() # parameters
+    netD = biggan_discriminator(dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, disc_ch=48, ch_multi=None, use_sn=True, use_attn=True, d_init="ortho", use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() # parameters
 
     # netG = nn.DataParallel(netG)
     # netD = nn.DataParallel(netD)

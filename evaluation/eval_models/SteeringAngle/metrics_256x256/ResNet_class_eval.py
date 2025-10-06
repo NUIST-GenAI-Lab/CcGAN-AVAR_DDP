@@ -1,6 +1,5 @@
 '''
-
-An pre-trained independent auxiliary regression model for better label consistency.
+Regular ResNet
 
 codes are based on
 @article{
@@ -18,10 +17,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch.autograd import Variable
+
+IMG_SIZE=256
+NC=3
 
 
-
-#------------------------------------------------------------------------------
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -75,31 +76,25 @@ class Bottleneck(nn.Module):
         return out
 
 
-class resnet_aux_regre(nn.Module):
-    def __init__(self, block, num_blocks, nc=3):
-        super(resnet_aux_regre, self).__init__()
+class ResNet_class_eval(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=200, nc=NC, ngpu = 1):
+        super(ResNet_class_eval, self).__init__()
         self.in_planes = 64
+        self.ngpu = ngpu
 
         self.main = nn.Sequential(
             nn.Conv2d(nc, 64, kernel_size=3, stride=1, padding=1, bias=False),  # h=h
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            self._make_layer(block, 64, num_blocks[0], stride=2),  # h=h/2 32
-            self._make_layer(block, 128, num_blocks[1], stride=2), # h=h/2 16
-            self._make_layer(block, 256, num_blocks[2], stride=2), # h=h/2 8
-            self._make_layer(block, 512, num_blocks[3], stride=2), # h=h/2 4
-            nn.AdaptiveAvgPool2d((1, 1))
+            nn.MaxPool2d(2,2), #h=h/2 128
+            # self._make_layer(block, 64, num_blocks[0], stride=1),  # h=h
+            self._make_layer(block, 64, num_blocks[0], stride=2),  # h=h/2 64
+            self._make_layer(block, 128, num_blocks[1], stride=2), # h=h/2 32
+            self._make_layer(block, 256, num_blocks[2], stride=2), # h=h/2 16
+            self._make_layer(block, 512, num_blocks[3], stride=2), # h=h/2 8
+            nn.AdaptiveAvgPool2d((1,1)) 
         )
-        self.linear = nn.Sequential(
-            nn.Linear(512, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-            nn.ReLU()
-        )
+        self.classifier = nn.Linear(512*block.expansion, num_classes)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
@@ -110,26 +105,37 @@ class resnet_aux_regre(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        features = self.main(x)
-        features = features.view(features.size(0), -1)
-        out = self.linear(features)
-        return out.view(-1)
+
+        if x.is_cuda and self.ngpu > 1:
+            features = nn.parallel.data_parallel(self.main, x, range(self.ngpu))
+            features = features.view(features.size(0), -1)
+            out = nn.parallel.data_parallel(self.classifier, features, range(self.ngpu))
+        else:
+            features = self.main(x)
+            features = features.view(features.size(0), -1)
+            out = self.classifier(features)
+        return out, features
 
 
-def resnet18_aux_regre(nc=3):
-    return resnet_aux_regre(BasicBlock, [2,2,2,2], nc=nc)
+def ResNet18_class_eval(num_classes=10, ngpu = 1):
+    return ResNet_class_eval(BasicBlock, [2,2,2,2], num_classes=num_classes, ngpu = ngpu)
 
-def resnet34_aux_regre(nc=3):
-    return resnet_aux_regre(BasicBlock, [3,4,6,3], nc=nc)
+def ResNet34_class_eval(num_classes=10, ngpu = 1):
+    return ResNet_class_eval(BasicBlock, [3,4,6,3], num_classes=num_classes, ngpu = ngpu)
 
-def resnet50_aux_regre(nc=3):
-    return resnet_aux_regre(Bottleneck, [3,4,6,3], nc=nc)
+def ResNet50_class_eval(num_classes=10, ngpu = 1):
+    return ResNet_class_eval(Bottleneck, [3,4,6,3], num_classes=num_classes, ngpu = ngpu)
+
+def ResNet101_class_eval(num_classes=10, ngpu = 1):
+    return ResNet_class_eval(Bottleneck, [3,4,23,3], num_classes=num_classes, ngpu = ngpu)
+
+def ResNet152_class_eval(num_classes=10, ngpu = 1):
+    return ResNet_class_eval(Bottleneck, [3,8,36,3], num_classes=num_classes, ngpu = ngpu)
 
 
 if __name__ == "__main__":
-    NC = 3
-    IMG_SIZE = 256
-    net = resnet18_aux_regre(nc=NC).cuda()
+    net = ResNet50_class_eval(num_classes=5, ngpu = 1).cuda()
     x = torch.randn(16,NC,IMG_SIZE,IMG_SIZE).cuda()
-    out = net(x)
+    out, features = net(x)
     print(out.size())
+    print(features.size())

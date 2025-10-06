@@ -22,7 +22,8 @@ def parse_opts():
 
     ''' GAN settings '''
     # model config
-    parser.add_argument('--net_name', type=str, default='SNGAN', choices=['SAGAN','SNGAN','BigGAN', 'BigGAN-deep', 'DCGAN'])
+    parser.add_argument('--net_name', type=str, default='SNGAN')
+    # parser.add_argument('--net_name', type=str, default='SNGAN', choices=['SAGAN','SNGAN', 'SNGAN_v2','BigGAN', 'BigGAN-deep', 'DCGAN'])
     parser.add_argument('--dim_z', type=int, default=256, help='Latent dimension of GAN')
     parser.add_argument('--gene_ch', type=int, default=64)
     parser.add_argument('--disc_ch', type=int, default=64)

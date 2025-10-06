@@ -438,3 +438,28 @@ def train_mlp(unique_labels_norm, model_mlp, model_name, model_h2y, epochs=500, 
     #end for epoch
 
     return model_mlp
+
+
+
+
+
+# if __name__ == "__main__":
+    
+#     label_embedding = LabelEmbed(dataset="RC-49", path_y2h="./", path_y2cov="./", type="sinusoidal")
+#     y = torch.randn(10, 1).cuda()
+#     print(label_embedding.fn_y2h(y).shape)
+#     print(label_embedding.fn_y2cov(y).shape)
+    
+    
+    
+#     from dataset import LoadDataSet
+
+#     file_path = 'C:/Users/DX/BaiduSyncdisk/Baidu_WD/datasets/CCGM_or_regression/RC-49'  
+#     dataset = LoadDataSet(data_name="RC-49", data_path=file_path, min_label=0, max_label=90, img_size=64, max_num_img_per_label=25, num_img_per_label_after_replica=0)
+    
+#     label_embedding = LabelEmbed(dataset=dataset, path_y2h="./output/model_y2h", path_y2cov="./output/model_y2cov", type="resnet")
+    
+#     y = torch.randn(10, 1)
+    
+#     print(label_embedding.fn_y2h(y).shape)
+#     print(label_embedding.fn_y2cov(y).shape)

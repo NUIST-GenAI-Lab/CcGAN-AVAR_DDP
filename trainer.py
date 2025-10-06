@@ -23,6 +23,7 @@ import gc
 import copy
 from collections import deque
 from PIL import Image
+import warnings
 
 from utils import SimpleProgressBar, normalize_images, random_hflip, random_rotate, random_vflip, exists, divisible_by, check_unnormalized_imgs
 from DiffAugment_pytorch import DiffAugment
@@ -901,7 +902,9 @@ class Trainer(object):
                     batch_fake_images = self.ema_g.ema_model(z, self.fn_y2h(y))
                 else:
                     batch_fake_images = self.netG(z, self.fn_y2h(y))
-                # batch_fake_images = torch.nan_to_num(batch_fake_images, nan=0.0)
+                if torch.isnan(batch_fake_images).any():
+                    warnings.warn("NaN values detected in generated images!")
+                    batch_fake_images = torch.nan_to_num(batch_fake_images, nan=torch.nanmean(batch_fake_images).item())
                 if denorm: #denorm imgs to save memory
                     assert batch_fake_images.max().item()<=1.0 and batch_fake_images.min().item()>=-1.0
                     batch_fake_images = batch_fake_images*0.5+0.5

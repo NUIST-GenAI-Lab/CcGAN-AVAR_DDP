@@ -494,7 +494,7 @@ if __name__ == "__main__":
         trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
         return {'Total': total_num, 'Trainable': trainable_num}
 
-    IMG_SIZE=256
+    IMG_SIZE=128
 
     netG = sagan_generator(dim_z=256, dim_y=128, nc=3, img_size=IMG_SIZE, gene_ch=64).cuda() # parameters
     netD = sagan_discriminator(dim_y=128, nc=3, img_size=IMG_SIZE, disc_ch=48, use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() # parameters

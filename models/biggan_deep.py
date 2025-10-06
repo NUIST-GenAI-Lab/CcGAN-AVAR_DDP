@@ -1,11 +1,11 @@
 '''
 The network for BigGAN-deep
 
-refer to https://github.com/POSTECH-CVLab/PyTorch-StudioGAN
+https://github.com/POSTECH-CVLab/PyTorch-StudioGAN
 
-refer to https://github.com/ajbrock/BigGAN-PyTorch
+https://github.com/ajbrock/BigGAN-PyTorch
 
-refer to https://github.com/voletiv/self-attention-GAN-pytorch/blob/master/sagan_models.py
+https://github.com/voletiv/self-attention-GAN-pytorch/blob/master/sagan_models.py
 
 '''
 
@@ -692,13 +692,13 @@ if __name__ == "__main__":
         trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
         return {'Total': total_num, 'Trainable': trainable_num}
 
-    IMG_SIZE=256
+    IMG_SIZE=128
     NC=3
     DIM_Z=128
     DIM_Y=128
 
     netG = biggan_deep_generator(dim_z=DIM_Z, dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, gene_ch=64, ch_multi=None, use_sn=True, use_attn=True, g_init="ortho").cuda() # parameters
-    netD = biggan_deep_discriminator(dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, disc_ch=84, ch_multi=None, use_sn=True, use_attn=True, d_init="ortho", use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() # parameters
+    netD = biggan_deep_discriminator(dim_y=DIM_Y, img_size=IMG_SIZE, nc=NC, disc_ch=64, ch_multi=None, use_sn=True, use_attn=True, d_init="ortho", use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() # parameters
 
     # netG = nn.DataParallel(netG)
     # netD = nn.DataParallel(netD)

@@ -335,4 +335,16 @@ class LoadDataSet:
         else:
             output = input*self.max_label
         return output
+
+
+
+# example
+if __name__ == "__main__":
+    file_path = 'C:/Users/DX/BaiduSyncdisk/Baidu_WD/datasets/CCGM_or_regression/RC-49' 
+    handler = LoadDataSet(data_name="RC-49", data_path=file_path, min_label=0, max_label=90, img_size=64, max_num_img_per_label=25, num_img_per_label_after_replica=0)
+    
+    # 读取并输出数据
+    data = handler.load_train_data()
+    
+    data2 = handler.load_evaluation_data()
     
