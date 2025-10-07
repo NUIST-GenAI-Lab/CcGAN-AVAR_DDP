@@ -154,9 +154,8 @@ elif args.net_name.lower() == "biggan-deep":
     netG = biggan_deep_generator(dim_z=args.dim_z, dim_y=args.dim_y, img_size=args.img_size, nc=args.num_channels, gene_ch=args.gene_ch, ch_multi=args.ch_multi_g, use_sn=args.use_sn, use_attn=args.use_attn, g_init="ortho")
     netD = biggan_deep_discriminator(dim_y=args.dim_y, img_size=args.img_size, nc=args.num_channels, disc_ch=args.disc_ch, ch_multi=args.ch_multi_d, use_sn=args.use_sn, use_attn=args.use_attn, d_init="ortho", use_aux_reg=args.use_aux_reg_branch, use_aux_dre = args.use_dre_reg, dre_head_arch=args.dre_head_arch)
 elif args.net_name.lower() == "dcgan":
-    netG = sngan_generator(dim_z=args.dim_z, dim_y=args.dim_y, nc=args.num_channels, img_size=args.img_size, gene_ch=args.gene_ch, ch_multi=args.ch_multi_g)
-    netD = sngan_discriminator(dim_y=args.dim_y, nc=args.num_channels, img_size=args.img_size, disc_ch=args.disc_ch, ch_multi=args.ch_multi_d, use_aux_reg=args.use_aux_reg_branch, use_aux_dre = args.use_dre_reg, dre_head_arch=args.dre_head_arch)
-    assert args.data_name=="Cell200"
+    netG = sngan_generator(dim_z=args.dim_z, dim_y=args.dim_y, nc=args.num_channels, img_size=args.img_size, gene_ch=args.gene_ch)
+    netD = sngan_discriminator(dim_y=args.dim_y, nc=args.num_channels, img_size=args.img_size, disc_ch=args.disc_ch, use_aux_reg=args.use_aux_reg_branch, use_aux_dre = args.use_dre_reg, dre_head_arch=args.dre_head_arch)
 else:
     raise ValueError("Not Supported Network!")
 

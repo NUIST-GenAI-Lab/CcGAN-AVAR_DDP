@@ -41,7 +41,7 @@ class ConditionalBatchNorm2d(nn.Module):
 #########################################################
 # genearator
 class dcgan_generator(nn.Module):
-    def __init__(self, dim_z=128, dim_y=128, nc=1, gene_ch = 64):
+    def __init__(self, dim_z=128, dim_y=128, nc=3, gene_ch = 64):
         super(dcgan_generator, self).__init__()
         self.dim_z = dim_z
         self.gene_ch = gene_ch
@@ -97,7 +97,7 @@ class dcgan_generator(nn.Module):
 #########################################################
 # discriminator
 class dcgan_discriminator(nn.Module):
-    def __init__(self, dim_y=128, nc=1, disc_ch = 64, use_aux_reg=False, use_aux_dre=False, dre_head_arch="MLP3", p_dropout=0.5):
+    def __init__(self, dim_y=128, nc=3, disc_ch = 64, use_aux_reg=False, use_aux_dre=False, dre_head_arch="MLP3", p_dropout=0.5):
         super(dcgan_discriminator, self).__init__()
         self.disc_ch = disc_ch
         self.dim_y = dim_y
@@ -247,8 +247,8 @@ if __name__ == "__main__":
         trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
         return {'Total': total_num, 'Trainable': trainable_num}
 
-    netG = dcgan_generator(dim_z=256, dim_y=128, nc=1).cuda() #131367044 parameters
-    netD = dcgan_discriminator(dim_y=128, nc=1, use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() #162158402 parameters
+    netG = dcgan_generator(dim_z=256, dim_y=128, nc=3, gene_ch = 64).cuda() #131367044 parameters
+    netD = dcgan_discriminator(dim_y=128, nc=3, disc_ch = 64, use_aux_reg=True, use_aux_dre=True, dre_head_arch="MLP3").cuda() #162158402 parameters
 
     # netG = nn.DataParallel(netG)
     # netD = nn.DataParallel(netD)
