@@ -37,6 +37,9 @@ If you use this code, please cite
 | accelearate | 1.6.0 |
 
 
+All 256x256 experiments need to be conducted with torch>=2.8.
+
+
 --------------------------------------------------------
 ## Datasets
 #### RC-49 (64x64)
