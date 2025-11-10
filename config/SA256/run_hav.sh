@@ -1,7 +1,6 @@
 #!/bin/bash
 
-export NCCL_P2P_DISABLE=1
-export NCCL_IB_DISABLE=1
+export PYTHONUNBUFFERED=1
 export CUDA_VISIBLE_DEVICES=0
 
 ROOT_PATH="<YOUR PATH>"
@@ -36,7 +35,10 @@ DIM_Y=128
 
 NITERS=80000
 RESUME_STEP=0
-python main.py \
+
+LOGFILE="output_${DATA_NAME}_${IMG_SIZE}_${SETTING}.txt"
+
+nohup setsid accelerate launch main.py \
     --setting_name "$SETTING" --data_name "$DATA_NAME" \
     --root_path "$ROOT_PATH" --data_path "$DATA_PATH" --seed "$SEED" \
     --min_label "$MIN_LABEL" --max_label "$MAX_LABEL" --img_size "$IMG_SIZE" \
@@ -56,7 +58,15 @@ python main.py \
     --use_dre_reg --dre_lambda 1e-2 --weight_d_aux_dre_loss 0.5 --weight_g_aux_dre_loss 0.5 \
     --samp_batch_size 50 --eval_batch_size 100 \
     --do_eval \
-    2>&1 | tee output_${DATA_NAME}_${IMG_SIZE}_${SETTING}.txt
+    "$@" \
+    >> "$LOGFILE" 2>&1 &
+
+PID=$!
+echo
+echo ">>> Training has started in the background.，PID=${PID}, log: ${LOGFILE}"
+echo
+
+tail -n 1000 -f "$LOGFILE"
 
     # --do_eval \
     # --dump_fake_for_niqe --niqe_dump_path $NIQE_PATH \

@@ -2,13 +2,41 @@
 Some helpful functions
 
 """
+
 import random
 import sys
+import threading
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from accelerate import Accelerator, DDPCommunicationHookType, DistributedDataParallelKwargs
+from torch.utils.data import DistributedSampler
+
+accelerator = None
+lock = threading.Lock()
+
+
+def init_accelerator(args) -> Accelerator:
+    global accelerator
+    with lock:  # ensure tread safety
+        if accelerator is None:
+            ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+            ddp_kwargs_fp16 = DistributedDataParallelKwargs(comm_hook=DDPCommunicationHookType.FP16,
+                                                            find_unused_parameters=True)
+            accelerator = Accelerator(
+                kwargs_handlers=[ddp_kwargs_fp16] if args.use_amp else [ddp_kwargs],
+                mixed_precision=args.mixed_precision_type if args.use_amp else "no")
+    return accelerator
+
+
+def get_accelerator() -> Accelerator:
+    global accelerator
+    if accelerator is not None:
+        return accelerator
+    else:
+        raise EnvironmentError('accelerator must init first')
 
 
 # ################################################################################

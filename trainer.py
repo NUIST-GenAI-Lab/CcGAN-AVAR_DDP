@@ -6,7 +6,9 @@ Support adaptive vicinity but the left and right vicinity may be asymmetric!
 """
 
 import copy
+import glob
 import os
+import re
 import timeit
 import warnings
 
@@ -19,7 +21,9 @@ from torchvision.utils import save_image
 
 from DiffAugment_pytorch import DiffAugment
 from ema_pytorch import EMA
-from utils import SimpleProgressBar, normalize_images, random_hflip, random_rotate, random_vflip, exists, divisible_by
+from ipc_util import get_s1, switch_s1, get_s2, switch_s2
+from utils import SimpleProgressBar, normalize_images, random_hflip, random_rotate, random_vflip, exists, divisible_by, \
+    get_accelerator
 
 
 class Trainer(object):
@@ -68,6 +72,9 @@ class Trainer(object):
     ):
         super().__init__()
 
+        # accelerator
+        self.accelerator = get_accelerator()
+
         # path
         self.results_folder = results_folder
         os.makedirs(self.results_folder, exist_ok=True)
@@ -87,7 +94,7 @@ class Trainer(object):
         # counts_train_elements: number of samples for each unique label
         assert train_images.max() > 1.0
         assert train_labels.min() >= 0 and train_labels.max() <= 1.0
-        print("\n Training labels' range is [{},{}].".format(train_labels.min(), train_labels.max()))
+        self.accelerator.print("\n Training labels' range is [{},{}].".format(train_labels.min(), train_labels.max()))
         # print(self.counts_train_elements)
 
         self.eval_labels = eval_labels  # evaluation labels are normalized to [0,1]
@@ -105,11 +112,11 @@ class Trainer(object):
         self.netD = netD
         self.fn_y2h = fn_y2h
 
-        # accelerator
         self.use_amp = use_amp
         self.mixed_precision_type = mixed_precision_type
-        self.accelerator = Accelerator(mixed_precision=mixed_precision_type if use_amp else "no")
-        set_seed(exp_seed)
+
+        # it's necessary to set different seed for DDP because we do not use a dataloader in training
+        set_seed(exp_seed + self.accelerator.process_index)
 
         # training
         self.niters = niters
@@ -155,8 +162,8 @@ class Trainer(object):
             curr_label = selected_labels[i]
             for j in range(nrow_visual):
                 y_visual[i * nrow_visual + j] = curr_label
-        print(y_visual)
-        self.y_visual = torch.from_numpy(y_visual).type(torch.float)
+        self.accelerator.print(y_visual)
+        self.y_visual = torch.from_numpy(y_visual).type(torch.float).to(self.accelerator.device)
 
         ## diffaugment
         self.use_diffaug = use_diffaug
@@ -186,19 +193,39 @@ class Trainer(object):
         # step counter state
         self.step = 0
 
-        # resume training
-        if self.resume_iter > 0:
-            self.load(self.resume_iter)
+        # # resume training
+        # if self.resume_iter>0:
+        #     self.load(self.resume_iter)
+
+        # resume max ckpt
+        ckpt_dir = self.results_folder
+        ckpt_files = glob.glob(os.path.join(ckpt_dir, "*.pth"))
+
+        max_iter = None
+        for f in ckpt_files:
+            fname = os.path.basename(f)
+            m = re.findall(r"\d+", fname)
+            if not m:
+                continue
+            it = int(m[-1])
+            if (max_iter is None) or (it > max_iter):
+                max_iter = it
+
+        if max_iter is not None:
+            self.accelerator.print(f"[Trainer] Auto resume from iter {max_iter}")
+            self.load(max_iter)
+        else:
+            self.accelerator.print("[Trainer] No checkpoint found, start from scratch")
 
         self.ft_dre_flag = False  # By default, the dre branch is not finetuned.
 
-    ########################################################################################      
+    ########################################################################################
     @property
     def device(self):
         return self.accelerator.device
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     def save(self, milestone):
         if not self.accelerator.is_local_main_process:
             return
@@ -215,7 +242,7 @@ class Trainer(object):
         torch.save(data, self.results_folder + "/ckpt_niter_{}.pth".format(milestone))
 
     ############################################################################################################################
-    ######################################################################################## 
+    ########################################################################################
     def load(self, milestone, return_ema=False):
         device = self.accelerator.device
         data = torch.load(self.results_folder + "/ckpt_niter_{}.pth".format(milestone), map_location=device,
@@ -235,8 +262,8 @@ class Trainer(object):
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     ## random data augmentation for a batch of real images
     def fn_transform(self, batch_real_images):
         assert isinstance(batch_real_images, np.ndarray)
@@ -248,8 +275,8 @@ class Trainer(object):
             batch_real_images = random_vflip(batch_real_images)
         return batch_real_images
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     ## make vicinity for target labels
     def make_vicinity(self, batch_target_labels, batch_target_labels_in_dataset):
 
@@ -268,7 +295,7 @@ class Trainer(object):
                 ## index for real images
                 if self.vicinal_params["threshold_type"] == "hard":
                     indx_real_in_vicinity = \
-                    np.where(np.abs(self.train_labels - batch_target_labels[j]) <= self.vicinal_params["kappa"])[0]
+                        np.where(np.abs(self.train_labels - batch_target_labels[j]) <= self.vicinal_params["kappa"])[0]
                 else:
                     # reverse the weight function for SVDL
                     indx_real_in_vicinity = np.where((self.train_labels - batch_target_labels[j]) ** 2 <= -np.log(
@@ -281,7 +308,8 @@ class Trainer(object):
                     ## index for real images
                     if self.vicinal_params["threshold_type"] == "hard":
                         indx_real_in_vicinity = \
-                        np.where(np.abs(self.train_labels - batch_target_labels[j]) <= self.vicinal_params["kappa"])[0]
+                            np.where(
+                                np.abs(self.train_labels - batch_target_labels[j]) <= self.vicinal_params["kappa"])[0]
                     else:
                         # reverse the weight function for SVDL
                         indx_real_in_vicinity = np.where((self.train_labels - batch_target_labels[j]) ** 2 <= -np.log(
@@ -290,7 +318,7 @@ class Trainer(object):
 
                 assert len(indx_real_in_vicinity) >= 1
 
-                # print(len(indx_real_in_vicinity))
+                # self.accelerator.print(len(indx_real_in_vicinity))
 
                 batch_real_indx[j] = np.random.choice(indx_real_in_vicinity, size=1)[0]
 
@@ -364,7 +392,7 @@ class Trainer(object):
                             break
                         loop_counter_warning += 1
                         if loop_counter_warning > 1e20:
-                            print("\n Detected an infinite loop")
+                            self.accelerator.print("\n Detected an infinite loop")
 
                 ## case 2: target_y is either the last element of unique_train_labels or larger than it. Only move toward left
                 elif idx_y >= (len(self.unique_train_labels) - 1):
@@ -382,7 +410,7 @@ class Trainer(object):
                             break
                         loop_counter_warning += 1
                         if loop_counter_warning > 1e20:
-                            print("\n Detected an infinite loop")
+                            self.accelerator.print("\n Detected an infinite loop")
 
                 ## case 3: other cases
                 else:
@@ -399,7 +427,7 @@ class Trainer(object):
                         idx_l])  # In unique_train_labels, the distance from target_y to its nearest left label.
                     dist2right = np.abs(target_y - self.unique_train_labels[
                         idx_r])  # In unique_train_labels, the distance from target_y to its nearest right label.
-                    # while n_got<self.vicinal_params["min_n_per_vic"] or (kappa_l+kappa_r)<self.min_abs_diff: 
+                    # while n_got<self.vicinal_params["min_n_per_vic"] or (kappa_l+kappa_r)<self.min_abs_diff:
                     loop_counter_warning = 0
                     while n_got < self.vicinal_params["min_n_per_vic"]:
                         if dist2left < dist2right:  # If closer to the left label, expand to the left.
@@ -428,8 +456,8 @@ class Trainer(object):
                             break
                         loop_counter_warning += 1
                         if loop_counter_warning > 1e20:
-                            print("\n Detected an infinite loop")
-                    ##end while n_got          
+                            self.accelerator.print("\n Detected an infinite loop")
+                    ##end while n_got
 
                 ##end if idx_y == 0
 
@@ -504,7 +532,7 @@ class Trainer(object):
             batch_real_labels = torch.from_numpy(batch_real_labels).type(torch.float).to(self.device)
             batch_fake_labels = torch.from_numpy(batch_fake_labels).type(torch.float).to(self.device)
 
-            ## determine vicinal weights for real and fake images              
+            ## determine vicinal weights for real and fake images
             if self.vicinal_params["threshold_type"].lower() == "soft" or self.vicinal_params[
                 "ada_vic_type"].lower() == "hybrid":
                 nu_l_all = torch.from_numpy(1 / (kappa_l_all) ** 2).type(torch.float).to(self.device)
@@ -516,14 +544,14 @@ class Trainer(object):
                 indx_right_fake = torch.where((batch_fake_labels - batch_target_labels) > 0)[0]
                 real_weights = torch.zeros_like(nu_l_all).type(torch.float).to(self.device)
                 real_weights[indx_left_real] = torch.exp(-nu_l_all[indx_left_real] * (
-                            batch_real_labels[indx_left_real] - batch_target_labels[indx_left_real]) ** 2)
+                        batch_real_labels[indx_left_real] - batch_target_labels[indx_left_real]) ** 2)
                 real_weights[indx_right_real] = torch.exp(-nu_r_all[indx_right_real] * (
-                            batch_real_labels[indx_right_real] - batch_target_labels[indx_right_real]) ** 2)
+                        batch_real_labels[indx_right_real] - batch_target_labels[indx_right_real]) ** 2)
                 fake_weights = torch.zeros_like(nu_r_all).type(torch.float).to(self.device)
                 fake_weights[indx_left_fake] = torch.exp(-nu_l_all[indx_left_fake] * (
-                            batch_fake_labels[indx_left_fake] - batch_target_labels[indx_left_fake]) ** 2)
+                        batch_fake_labels[indx_left_fake] - batch_target_labels[indx_left_fake]) ** 2)
                 fake_weights[indx_right_fake] = torch.exp(-nu_r_all[indx_right_fake] * (
-                            batch_fake_labels[indx_right_fake] - batch_target_labels[indx_right_fake]) ** 2)
+                        batch_fake_labels[indx_right_fake] - batch_target_labels[indx_right_fake]) ** 2)
                 # ## For those weights smaller than threshold, we replace them with the threshold.
                 # if self.vicinal_params["ada_vic_type"].lower()=="hybrid":
                 #     real_weights[real_weights<self.vicinal_params["nonzero_soft_weight_threshold"]] = self.vicinal_params["nonzero_soft_weight_threshold"]
@@ -536,7 +564,7 @@ class Trainer(object):
 
             return batch_real_indx, batch_fake_labels, batch_real_labels, real_weights, fake_weights, kappa_l_all, kappa_r_all
 
-    ########################################################################################  
+    ########################################################################################
     ## adversarial loss for training discriminator
     def fn_disc_adv_loss(self, real_adv_out, fake_adv_out, real_weights=None, fake_weights=None, eps=1e-20):
         if self.loss_type.lower() == "vanilla":
@@ -568,8 +596,8 @@ class Trainer(object):
             raise ValueError('Not supported loss type!!!')
         return g_loss
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     ## Auxiliary regression loss for better label consistency
     def adaptive_huber_loss(self, y_pred, y_true, quantile=0.9, delta=None, reduction="mean"):
         # Small delta:​​ Close to MAE (Mean Absolute Error), more robust to outliers.
@@ -630,7 +658,7 @@ class Trainer(object):
         return reg_loss
 
     ############################################################################################################################
-    ######################################################################################## 
+    ########################################################################################
     ## DRE-based subsampling
     def penalized_softplus_loss(self, dr_real, dr_fake):
         softplus_fn = torch.nn.Softplus(beta=1, threshold=20)
@@ -641,8 +669,8 @@ class Trainer(object):
         dre_loss = SP_div + penalty
         return dre_loss
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     def train(self):
         device = self.accelerator.device
 
@@ -744,7 +772,7 @@ class Trainer(object):
                         d_loss /= float(self.num_grad_acc_d)
 
                     self.accelerator.backward(d_loss)
-                ##end for 
+                ##end for
 
                 self.accelerator.clip_grad_norm_(self.netD.parameters(), self.max_grad_norm)
                 self.accelerator.wait_for_everyone()
@@ -840,7 +868,7 @@ class Trainer(object):
                     g_loss /= float(self.num_grad_acc_g)
 
                     self.accelerator.backward(g_loss)
-            ##end for           
+            ##end for
             self.accelerator.clip_grad_norm_(self.netG.parameters(), self.max_grad_norm)
             self.accelerator.wait_for_everyone()
             self.optG.step()
@@ -856,7 +884,7 @@ class Trainer(object):
 
                 # print loss
                 if divisible_by(self.step, 20):
-                    print(
+                    self.accelerator.print(
                         "\n CcGAN,%s,%s: [Iter %d/%d] [D loss: %.3f/%.3f/%.3f] [G loss: %.3f/%.3f/%.3f] [Time: %.3f]" % (
                             self.net_name, self.loss_type, self.step, self.niters, d_adv_loss_val, d_reg_loss_val,
                             d_dre_loss_val, g_adv_loss_val, g_reg_loss_val, g_dre_loss_val,
@@ -870,7 +898,7 @@ class Trainer(object):
                                 d_dre_loss_val, g_adv_loss_val, g_reg_loss_val, g_dre_loss_val,
                                 timeit.default_timer() - start_time))
 
-                if self.step != 0 and divisible_by(self.step, self.sample_freq):
+                if self.step != 0 and (divisible_by(self.step, self.sample_freq) or get_s1()):
                     if self.use_ema:
                         self.ema_g.ema_model.eval()
                     else:
@@ -884,19 +912,21 @@ class Trainer(object):
                         gen_imgs = gen_imgs.detach().cpu()
                         save_image(gen_imgs.data, self.save_images_folder + '/{}.png'.format(self.step),
                                    nrow=self.nrow_visual, normalize=True)
+                    switch_s1(0)  # anyway, reset the signal
 
-                if self.step != 0 and divisible_by(self.step, self.save_freq):
+                if self.step != 0 and (divisible_by(self.step, self.save_freq) or get_s2()):
                     milestone = self.step
                     # self.ema_g.ema_model.eval()
                     self.save(milestone)
+                    switch_s2(0)  # anyway, reset the signal
 
         self.accelerator.print('training complete \n')
         ## end while self.step
 
     ##end def train
 
-    ############################################################################################################################ 
-    ######################################################################################## 
+    ############################################################################################################################
+    ########################################################################################
     def sample_given_labels(self, given_labels, batch_size, denorm=True, to_numpy=False, verbose=False):
         """
         Generate samples based on given labels
@@ -960,8 +990,8 @@ class Trainer(object):
 
         return fake_images, fake_labels
 
-    ##########################################################################################################  
-    ########################################################################################  
+    ##########################################################################################################
+    ########################################################################################
     # Enhanced sampler based on the trained DR model
     '''
     (0) Finetuning the density ratio branch of the discriminator after the GAN training
@@ -998,7 +1028,7 @@ class Trainer(object):
         self.dre_net, optDRE = self.dre_accelerator.prepare(self.dre_net, optDRE)
 
         path_to_ckpt = self.results_folder + "/ckpt_niter_{}_dre_niter_{}.pth".format(self.step, dre_ft_niters)
-        print("\n dre ckpt path:", path_to_ckpt)
+        self.accelerator.print("\n dre ckpt path:", path_to_ckpt)
 
         if os.path.isfile(path_to_ckpt):
             checkpoint = torch.load(path_to_ckpt, map_location=device, weights_only=True)
@@ -1047,11 +1077,12 @@ class Trainer(object):
             optDRE.zero_grad()
             self.dre_accelerator.wait_for_everyone()
 
-            print("\n Step:{}/{}; Finetune DRE loss: {:.3f}; DR real: {:.3f}; DR fake: {:.3f}".format(step + 1,
-                                                                                                      dre_ft_niters,
-                                                                                                      dre_loss_val,
-                                                                                                      DR_real.mean().item(),
-                                                                                                      DR_fake.mean().item()))
+            self.accelerator.print(
+                "\n Step:{}/{}; Finetune DRE loss: {:.3f}; DR real: {:.3f}; DR fake: {:.3f}".format(step + 1,
+                                                                                                    dre_ft_niters,
+                                                                                                    dre_loss_val,
+                                                                                                    DR_real.mean().item(),
+                                                                                                    DR_fake.mean().item()))
 
             # ## debugging
             if divisible_by(step + 1, 100):
@@ -1059,17 +1090,19 @@ class Trainer(object):
                 with torch.no_grad():
                     DR_real2 = self.dre_net(batch_real_images, self.fn_y2h(batch_target_labels))["dre_output"]
                     DR_fake2 = self.dre_net(batch_fake_images, self.fn_y2h(batch_target_labels))["dre_output"]
-                    print("\n Debug DR real (train): {:.3f}; DR fake (train): {:.3f}".format(DR_real.mean().item(),
-                                                                                             DR_fake.mean().item()))
-                    print("\n Debug DR real (eval): {:.3f}; DR fake (eval): {:.3f}".format(DR_real2.mean().item(),
-                                                                                           DR_fake2.mean().item()))
+                    self.accelerator.print(
+                        "\n Debug DR real (train): {:.3f}; DR fake (train): {:.3f}".format(DR_real.mean().item(),
+                                                                                           DR_fake.mean().item()))
+                    self.accelerator.print(
+                        "\n Debug DR real (eval): {:.3f}; DR fake (eval): {:.3f}".format(DR_real2.mean().item(),
+                                                                                         DR_fake2.mean().item()))
                 self.dre_net.dre_linear.train()
-        ##end for step 
+        ##end for step
         # store model
         torch.save({
             'dre_net_state_dict': self.dre_net.state_dict(),
         }, path_to_ckpt)
-        print("\n End finetuning.")
+        self.accelerator.print("\n End finetuning.")
 
         ## compute density ratios given images and their labels
 
@@ -1122,7 +1155,7 @@ class Trainer(object):
 
     ## rejection sampling for one label
     def rejection_sampling_given_label(self, given_label, nfake, nburnin, batch_size=100, verbose=False):
-        # given_label is a value    
+        # given_label is a value
 
         if batch_size > nfake:
             batch_size = nfake
@@ -1134,8 +1167,9 @@ class Trainer(object):
         ### get the maximum density ratio
         burnin_density_ratios = self.compute_density_ratio(images=burnin_images, labels=burnin_labels,
                                                            batch_size=np.min([batch_size, nburnin]), to_numpy=True)
-        print((burnin_density_ratios.min(), np.median(burnin_density_ratios), np.mean(burnin_density_ratios),
-               burnin_density_ratios.max()))
+        self.accelerator.print(
+            (burnin_density_ratios.min(), np.median(burnin_density_ratios), np.mean(burnin_density_ratios),
+             burnin_density_ratios.max()))
         M_bar = np.max(burnin_density_ratios)
 
         ## Rejection sampling
@@ -1167,7 +1201,7 @@ class Trainer(object):
 
     def rejection_sampling_given_labels(self, given_labels, nburnin_per_label, batch_size=100, verbose=False):
         # given_labels is an array
-        print("\n Start rejection sampling...")
+        self.accelerator.print("\n Start rejection sampling...")
         assert isinstance(given_labels, np.ndarray)
         assert given_labels.min() >= 0 and given_labels.max() <= 1.0
         unique_labels, counts_elements = np.unique(given_labels, return_counts=True)
@@ -1177,8 +1211,9 @@ class Trainer(object):
         for i in range(len(unique_labels)):
             label_i = unique_labels[i]
             nfake_i = counts_elements[i]
-            print("\n [{}/{}] Start generating {} fake images for label {}.".format(i + 1, len(unique_labels), nfake_i,
-                                                                                    label_i))
+            self.accelerator.print(
+                "\n [{}/{}] Start generating {} fake images for label {}.".format(i + 1, len(unique_labels), nfake_i,
+                                                                                  label_i))
             fake_images_i, fake_labels_i = self.rejection_sampling_given_label(given_label=label_i, nfake=nfake_i,
                                                                                nburnin=nburnin_per_label,
                                                                                batch_size=batch_size, verbose=verbose)
@@ -1186,13 +1221,14 @@ class Trainer(object):
             assert fake_images_i.max() > 1 and fake_images_i.max() <= 255.0 and fake_labels_i.min() >= 0 and fake_labels_i.max() <= 1
             fake_images.append(fake_images_i)
             fake_labels.append(fake_labels_i.reshape(-1))
-            print("\n [{}/{}] Finish generating {} fake images for label {}. Time elapses: {}".format(i + 1,
-                                                                                                      len(unique_labels),
-                                                                                                      nfake_i, label_i,
-                                                                                                      timeit.default_timer() - start))
+            self.accelerator.print(
+                "\n [{}/{}] Finish generating {} fake images for label {}. Time elapses: {}".format(i + 1,
+                                                                                                    len(unique_labels),
+                                                                                                    nfake_i, label_i,
+                                                                                                    timeit.default_timer() - start))
         ##end for i
         fake_images = np.concatenate(fake_images, axis=0)
         fake_labels = np.concatenate(fake_labels, axis=0)
-        print('\n End generating fake data!')
-        print("\n We got {} fake images.".format(len(fake_images)))
+        self.accelerator.print('\n End generating fake data!')
+        self.accelerator.print("\n We got {} fake images.".format(len(fake_images)))
         return fake_images, fake_labels

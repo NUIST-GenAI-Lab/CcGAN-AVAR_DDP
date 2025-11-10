@@ -5,10 +5,9 @@ import timeit
 import numpy as np
 import torch
 import torch.nn as nn
-from einops import rearrange, reduce, repeat, pack, unpack
 
 from models import ResNet34_embed_y2h, model_y2h, ResNet34_embed_y2cov, model_y2cov
-from utils import IMGs_dataset
+from utils import IMGs_dataset, get_accelerator
 
 
 # Note that the ResNet34_embed_y2cov and model_y2cov modules were specifically designed for CCDM (Continuous Conditional Diffusion Models) and are not utilized in this repository. They are retained solely for completeness.
@@ -19,7 +18,7 @@ class GaussianFourierProjection(nn.Module):
 
     def __init__(self, embed_dim, scale=30.):
         super().__init__()
-        # Randomly sample weights during initialization. These weights are fixed 
+        # Randomly sample weights during initialization. These weights are fixed
         # during optimization and are not trainable.
         self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
         self.embed_dim = embed_dim
@@ -32,7 +31,7 @@ class GaussianFourierProjection(nn.Module):
 
 class LabelEmbed:
     def __init__(self, dataset, path_y2h, path_y2cov, y2h_type="resnet", y2cov_type="sinusoidal", h_dim=128,
-                 cov_dim=64 ** 2 * 3, batch_size=128, nc=3, device="cuda"):
+                 cov_dim=64 ** 2 * 3, batch_size=128, nc=3):
         self.dataset = dataset
         self.data_name = dataset.data_name
         self.path_y2h = path_y2h
@@ -46,6 +45,10 @@ class LabelEmbed:
 
         assert y2h_type in ['resnet', 'sinusoidal', 'gaussian']
         assert y2cov_type in ['resnet', 'sinusoidal', 'gaussian']
+
+        accelerator = get_accelerator()
+        self.accelerator = accelerator
+        device = accelerator.device
 
         ## if type is resnet, we need to train two networks for label embedding
         if y2h_type == "resnet":
@@ -61,7 +64,8 @@ class LabelEmbed:
             ## training dataset
             train_images, _, train_labels = self.dataset.load_train_data()
             trainset = IMGs_dataset(train_images, train_labels, normalize=True)
-            trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
+            # trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
+            trainloader = trainset.get_dataloader(batch_size=self.batch_size, shuffle=True)
             unique_labels_norm = np.sort(np.array(list(set(train_labels))))
 
             ## training embedding network for y2h
@@ -71,14 +75,13 @@ class LabelEmbed:
             # init network
             model_resnet_y2h = ResNet34_embed_y2h(dim_embed=self.h_dim, nc=self.nc)
             model_resnet_y2h = model_resnet_y2h.to(device)
-            model_resnet_y2h = nn.DataParallel(model_resnet_y2h)
             model_mlp_y2h = model_y2h(dim_embed=self.h_dim, num_groups=4 if self.data_name.lower() == "cell200" else 8)
             model_mlp_y2h = model_mlp_y2h.to(device)
-            model_mlp_y2h = nn.DataParallel(model_mlp_y2h)
 
             # training or loading existing ckpt
             if not os.path.isfile(resnet_y2h_filename_ckpt):
-                print("\n Start training CNN for y2h label embedding >>>")
+                accelerator.wait_for_everyone()
+                accelerator.print("\n Start training CNN for y2h label embedding >>>")
                 model_resnet_y2h = train_resnet(net=model_resnet_y2h, net_name="resnet_y2h", trainloader=trainloader,
                                                 epochs=epochs_resnet, resume_epoch=0, lr_base=base_lr_resnet,
                                                 lr_decay_factor=0.1, lr_decay_epochs=[80, 140], weight_decay=1e-4,
@@ -88,16 +91,32 @@ class LabelEmbed:
                     'net_state_dict': model_resnet_y2h.state_dict(),
                 }, resnet_y2h_filename_ckpt)
             else:
-                print("\n resnet_y2h ckpt already exists")
-                print("\n Loading...")
+                accelerator.print("\n resnet_y2h ckpt already exists")
+                accelerator.print("\n Loading...")
+                # checkpoint = torch.load(resnet_y2h_filename_ckpt, weights_only=True)
+                # model_resnet_y2h.load_state_dict(checkpoint['net_state_dict'])
                 checkpoint = torch.load(resnet_y2h_filename_ckpt, weights_only=True)
-                model_resnet_y2h.load_state_dict(checkpoint['net_state_dict'])
+                # Check if the model was saved with DataParallel or DDP
+                state_dict = checkpoint['net_state_dict']
+                # Remove the 'module.' prefix if the model was saved in DataParallel/DistributedDataParallel
+                new_state_dict = {}
+                for key, value in state_dict.items():
+                    new_key = key.replace('module.', '')  # Remove 'module.' from keys
+                    new_state_dict[new_key] = value
+                model_resnet_y2h.load_state_dict(new_state_dict)
             # end not os.path.isfile
 
-            # training or loading existing ckpt
-            if not os.path.isfile(mlp_y2h_filename_ckpt):
-                print("\n Start training mlp_y2h >>>")
-                model_h2y = model_resnet_y2h.module.h2y
+            backbone = getattr(model_resnet_y2h, "module", model_resnet_y2h)
+            if hasattr(backbone, "model") and hasattr(backbone.model, "h2y"):
+                model_h2y = backbone.model.h2y
+            elif hasattr(backbone, "h2y"):
+                model_h2y = backbone.h2y
+
+            # training (This step is easy and fast, so only the main process is used.)
+            if accelerator.is_main_process and not os.path.isfile(mlp_y2h_filename_ckpt):
+                accelerator.print("\n Start training mlp_y2h >>>")
+                # model_h2y = model_resnet_y2h.model.h2y
+
                 model_mlp_y2h = train_mlp(unique_labels_norm=unique_labels_norm, model_mlp=model_mlp_y2h,
                                           model_name="mlp_y2h", model_h2y=model_h2y, epochs=500, lr_base=base_lr_mlp,
                                           lr_decay_factor=0.1, lr_decay_epochs=[150, 250, 350], weight_decay=1e-4,
@@ -106,42 +125,48 @@ class LabelEmbed:
                 torch.save({
                     'net_state_dict': model_mlp_y2h.state_dict(),
                 }, mlp_y2h_filename_ckpt)
-            else:
-                print("\n model mlp_y2h ckpt already exists")
-                print("\n Loading...")
-                checkpoint = torch.load(mlp_y2h_filename_ckpt, weights_only=True)
-                model_mlp_y2h.load_state_dict(checkpoint['net_state_dict'])
-            # end not os.path.isfile
+            accelerator.wait_for_everyone()
+
+            # loading existing ckpt
+            accelerator.print("\n model mlp_y2h ckpt already exists")
+            accelerator.print("\n Loading...")
+            checkpoint = torch.load(mlp_y2h_filename_ckpt, weights_only=True)
+            state_dict = checkpoint["net_state_dict"]
+            # compatible with ddp or without, remove the 'module.' prefix if exists
+            if any(k.startswith("module.") for k in state_dict.keys()):
+                state_dict = {k[len("module."):]: v for k, v in state_dict.items()}
+            model_mlp_y2h.load_state_dict(state_dict)
 
             self.model_mlp_y2h = model_mlp_y2h
 
             ##some simple test
-            indx_tmp = np.arange(len(unique_labels_norm))
-            np.random.shuffle(indx_tmp)
-            indx_tmp = indx_tmp[:10]
-            labels_tmp = unique_labels_norm[indx_tmp].reshape(-1, 1)
-            labels_tmp = torch.from_numpy(labels_tmp).type(torch.float).cuda()
-            epsilons_tmp = np.random.normal(0, 0.2, len(labels_tmp))
-            epsilons_tmp = torch.from_numpy(epsilons_tmp).view(-1, 1).type(torch.float).cuda()
-            labels_noise_tmp = torch.clamp(labels_tmp + epsilons_tmp, 0.0, 1.0)
-            model_resnet_y2h.eval()
-            net_h2y = model_resnet_y2h.module.h2y
-            model_mlp_y2h.eval()
-            with torch.no_grad():
-                labels_hidden_tmp = model_mlp_y2h(labels_tmp)
-                labels_noise_hidden_tmp = model_mlp_y2h(labels_noise_tmp)
-                labels_rec_tmp = net_h2y(labels_hidden_tmp).cpu().numpy().reshape(-1, 1)
-                labels_noise_rec_tmp = net_h2y(labels_noise_hidden_tmp).cpu().numpy().reshape(-1, 1)
-                labels_hidden_tmp = labels_hidden_tmp.cpu().numpy()
-                labels_noise_hidden_tmp = labels_noise_hidden_tmp.cpu().numpy()
-            labels_tmp = labels_tmp.cpu().numpy()
-            labels_noise_tmp = labels_noise_tmp.cpu().numpy()
-            results1 = np.concatenate((labels_tmp, labels_rec_tmp), axis=1)
-            print("\n labels vs reconstructed labels")
-            print(results1)
-            results2 = np.concatenate((labels_noise_tmp, labels_noise_rec_tmp), axis=1)
-            print("\n noisy labels vs reconstructed labels")
-            print(results2)
+            if accelerator.is_main_process:
+                indx_tmp = np.arange(len(unique_labels_norm))
+                np.random.shuffle(indx_tmp)
+                indx_tmp = indx_tmp[:10]
+                labels_tmp = unique_labels_norm[indx_tmp].reshape(-1, 1)
+                labels_tmp = torch.from_numpy(labels_tmp).type(torch.float).to(device)
+                epsilons_tmp = np.random.normal(0, 0.2, len(labels_tmp))
+                epsilons_tmp = torch.from_numpy(epsilons_tmp).view(-1, 1).type(torch.float).to(device)
+                labels_noise_tmp = torch.clamp(labels_tmp + epsilons_tmp, 0.0, 1.0)
+                model_resnet_y2h.eval()
+                net_h2y = model_h2y
+                model_mlp_y2h.eval()
+                with torch.no_grad():
+                    labels_hidden_tmp = model_mlp_y2h(labels_tmp)
+                    labels_noise_hidden_tmp = model_mlp_y2h(labels_noise_tmp)
+                    labels_rec_tmp = net_h2y(labels_hidden_tmp).cpu().numpy().reshape(-1, 1)
+                    labels_noise_rec_tmp = net_h2y(labels_noise_hidden_tmp).cpu().numpy().reshape(-1, 1)
+                    labels_hidden_tmp = labels_hidden_tmp.cpu().numpy()
+                    labels_noise_hidden_tmp = labels_noise_hidden_tmp.cpu().numpy()
+                labels_tmp = labels_tmp.cpu().numpy()
+                labels_noise_tmp = labels_noise_tmp.cpu().numpy()
+                results1 = np.concatenate((labels_tmp, labels_rec_tmp), axis=1)
+                accelerator.print("\n labels vs reconstructed labels")
+                accelerator.print(results1)
+                results2 = np.concatenate((labels_noise_tmp, labels_noise_rec_tmp), axis=1)
+                accelerator.print("\n noisy labels vs reconstructed labels")
+                accelerator.print(results2)
 
         ##end if
 
@@ -158,7 +183,8 @@ class LabelEmbed:
             ## training dataset
             train_images, _, train_labels = self.dataset.load_train_data()
             trainset = IMGs_dataset(train_images, train_labels, normalize=True)
-            trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
+            # trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
+            trainloader = trainset.get_dataloader(batch_size=self.batch_size, shuffle=True)
             unique_labels_norm = np.sort(np.array(list(set(train_labels))))
 
             ## trainin embedding network for y2cov
@@ -169,14 +195,12 @@ class LabelEmbed:
             # init network
             model_resnet_y2cov = ResNet34_embed_y2cov(dim_embed=self.cov_dim, nc=self.nc)
             model_resnet_y2cov = model_resnet_y2cov.to(device)
-            model_resnet_y2cov = nn.DataParallel(model_resnet_y2cov)
             model_mlp_y2cov = model_y2cov(dim_embed=self.cov_dim)
             model_mlp_y2cov = model_mlp_y2cov.to(device)
-            model_mlp_y2cov = nn.DataParallel(model_mlp_y2cov)
 
             # training or loading existing ckpt
             if not os.path.isfile(resnet_y2cov_filename_ckpt):
-                print("\n Start training CNN for y2cov label embedding >>>")
+                accelerator.print("\n Start training CNN for y2cov label embedding >>>")
                 model_resnet_y2cov = train_resnet(net=model_resnet_y2cov, net_name="resnet_y2cov",
                                                   trainloader=trainloader, epochs=epochs_resnet, resume_epoch=0,
                                                   lr_base=base_lr_resnet, lr_decay_factor=0.1,
@@ -187,73 +211,79 @@ class LabelEmbed:
                     'net_state_dict': model_resnet_y2cov.state_dict(),
                 }, resnet_y2cov_filename_ckpt)
             else:
-                print("\n resnet_y2cov ckpt already exists")
-                print("\n Loading...")
+                accelerator.print("\n resnet_y2cov ckpt already exists")
+                accelerator.print("\n Loading...")
                 checkpoint = torch.load(resnet_y2cov_filename_ckpt, weights_only=True)
                 model_resnet_y2cov.load_state_dict(checkpoint['net_state_dict'])
-            # end not os.path.isfile
 
-            # training or loading existing ckpt
-            if not os.path.isfile(mlp_y2cov_filename_ckpt):
-                print("\n Start training mlp_y2cov >>>")
-                model_h2y = model_resnet_y2cov.module.h2y
+            if hasattr(model_resnet_y2cov, 'model') and hasattr(model_resnet_y2cov.model, 'h2y'):
+                model_h2y = model_resnet_y2cov.model.h2y
+            elif hasattr(model_resnet_y2h, 'h2y'):
+                model_h2y = model_resnet_y2cov.h2y
+
+            # training (This step is easy and fast, so only the main process is used.)
+            if accelerator.is_main_process and not os.path.isfile(mlp_y2cov_filename_ckpt):
                 model_mlp_y2cov = train_mlp(unique_labels_norm=unique_labels_norm, model_mlp=model_mlp_y2cov,
                                             model_name="mlp_y2cov", model_h2y=model_h2y, epochs=500,
                                             lr_base=base_lr_mlp, lr_decay_factor=0.1, lr_decay_epochs=[150, 250, 350],
-                                            weight_decay=1e-4, batch_size=128)
+                                            weight_decay=1e-4, batch_size=128, device=accelerator.device)
                 # save model
                 torch.save({
                     'net_state_dict': model_mlp_y2cov.state_dict(),
                 }, mlp_y2cov_filename_ckpt)
-            else:
-                print("\n model mlp_y2cov ckpt already exists")
-                print("\n Loading...")
-                checkpoint = torch.load(mlp_y2cov_filename_ckpt, weights_only=True)
-                model_mlp_y2cov.load_state_dict(checkpoint['net_state_dict'])
-            # end not os.path.isfile
+            accelerator.wait_for_everyone()
+
+            # loading existing ckpt
+            accelerator.print("\n model mlp_y2cov ckpt already exists")
+            accelerator.print("\n Loading...")
+            checkpoint = torch.load(mlp_y2cov_filename_ckpt, weights_only=True)
+            model_mlp_y2cov.load_state_dict(checkpoint['net_state_dict'])
 
             self.model_mlp_y2cov = model_mlp_y2cov
 
             ##some simple test
-            indx_tmp = np.arange(len(unique_labels_norm))
-            np.random.shuffle(indx_tmp)
-            indx_tmp = indx_tmp[:10]
-            labels_tmp = unique_labels_norm[indx_tmp].reshape(-1, 1)
-            labels_tmp = torch.from_numpy(labels_tmp).type(torch.float).cuda()
-            epsilons_tmp = np.random.normal(0, 0.2, len(labels_tmp))
-            epsilons_tmp = torch.from_numpy(epsilons_tmp).view(-1, 1).type(torch.float).cuda()
-            labels_noise_tmp = torch.clamp(labels_tmp + epsilons_tmp, 0.0, 1.0)
-            model_resnet_y2cov.eval()
-            net_h2y = model_resnet_y2cov.module.h2y
-            model_mlp_y2cov.eval()
-            with torch.no_grad():
-                labels_hidden_tmp = model_mlp_y2cov(labels_tmp)
-                labels_noise_hidden_tmp = model_mlp_y2cov(labels_noise_tmp)
-                labels_rec_tmp = net_h2y(labels_hidden_tmp).cpu().numpy().reshape(-1, 1)
-                labels_noise_rec_tmp = net_h2y(labels_noise_hidden_tmp).cpu().numpy().reshape(-1, 1)
-                labels_hidden_tmp = labels_hidden_tmp.cpu().numpy()
-                labels_noise_hidden_tmp = labels_noise_hidden_tmp.cpu().numpy()
-            labels_tmp = labels_tmp.cpu().numpy()
-            labels_noise_tmp = labels_noise_tmp.cpu().numpy()
-            results1 = np.concatenate((labels_tmp, labels_rec_tmp), axis=1)
-            print("\n labels vs reconstructed labels")
-            print(results1)
-            results2 = np.concatenate((labels_noise_tmp, labels_noise_rec_tmp), axis=1)
-            print("\n noisy labels vs reconstructed labels")
-            print(results2)
+            if accelerator.is_main_process:
+                indx_tmp = np.arange(len(unique_labels_norm))
+                np.random.shuffle(indx_tmp)
+                indx_tmp = indx_tmp[:10]
+                labels_tmp = unique_labels_norm[indx_tmp].reshape(-1, 1)
+                labels_tmp = torch.from_numpy(labels_tmp).type(torch.float).to(device)
+                epsilons_tmp = np.random.normal(0, 0.2, len(labels_tmp))
+                epsilons_tmp = torch.from_numpy(epsilons_tmp).view(-1, 1).type(torch.float).to(device)
+                labels_noise_tmp = torch.clamp(labels_tmp + epsilons_tmp, 0.0, 1.0)
+                model_resnet_y2cov.eval()
+                net_h2y = model_h2y
+                model_mlp_y2cov.eval()
+                with torch.no_grad():
+                    labels_hidden_tmp = model_mlp_y2cov(labels_tmp)
+                    labels_noise_hidden_tmp = model_mlp_y2cov(labels_noise_tmp)
+                    labels_rec_tmp = net_h2y(labels_hidden_tmp).cpu().numpy().reshape(-1, 1)
+                    labels_noise_rec_tmp = net_h2y(labels_noise_hidden_tmp).cpu().numpy().reshape(-1, 1)
+                    labels_hidden_tmp = labels_hidden_tmp.cpu().numpy()
+                    labels_noise_hidden_tmp = labels_noise_hidden_tmp.cpu().numpy()
+                labels_tmp = labels_tmp.cpu().numpy()
+                labels_noise_tmp = labels_noise_tmp.cpu().numpy()
+                results1 = np.concatenate((labels_tmp, labels_rec_tmp), axis=1)
+                accelerator.print("\n labels vs reconstructed labels")
+                accelerator.print(results1)
+                results2 = np.concatenate((labels_noise_tmp, labels_noise_rec_tmp), axis=1)
+                accelerator.print("\n noisy labels vs reconstructed labels")
+                accelerator.print(results2)
 
         ##end if
 
     ## function for y2h
     def fn_y2h(self, labels):
         embed_dim = self.h_dim
+        accelerator = self.accelerator
+        device = accelerator.device
         if self.y2h_type == "sinusoidal":
             max_period = 10000
             labels = labels.view(len(labels))
             half = embed_dim // 2
             freqs = torch.exp(
                 -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-            ).to(device=labels.device)
+            ).to(device)
             args = labels[:, None].float() * freqs[None]
             embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
             if embed_dim % 2:
@@ -266,7 +296,7 @@ class LabelEmbed:
 
         elif self.y2h_type == "resnet":
             self.model_mlp_y2h.eval()
-            self.model_mlp_y2h = self.model_mlp_y2h.cuda()
+            self.model_mlp_y2h = self.model_mlp_y2h.to(device)
             embedding = self.model_mlp_y2h(labels)
 
         return embedding
@@ -275,13 +305,15 @@ class LabelEmbed:
 
     def fn_y2cov(self, labels):
         embed_dim = self.cov_dim
+        accelerator = get_accelerator()
+        device = accelerator.device
         if self.y2cov_type == "sinusoidal":
             max_period = 10000
             labels = labels.view(len(labels))
             half = embed_dim // 2
             freqs = torch.exp(
                 -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-            ).to(device=labels.device)
+            ).to(device)
             args = labels[:, None].float() * freqs[None]
             embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
             if embed_dim % 2:
@@ -294,14 +326,14 @@ class LabelEmbed:
 
         elif self.y2cov_type == "resnet":
             self.model_mlp_y2cov.eval()
-            self.model_mlp_y2cov = self.model_mlp_y2cov.cuda()
+            self.model_mlp_y2cov = self.model_mlp_y2cov.to(device)
             embedding = self.model_mlp_y2cov(labels)
 
         return embedding
 
 
 def train_resnet(net, net_name, trainloader, epochs=200, resume_epoch=0, lr_base=0.01, lr_decay_factor=0.1,
-                 lr_decay_epochs=[80, 140], weight_decay=1e-4, path_to_ckpt=None, device="cuda"):
+                 lr_decay_epochs=[80, 140], weight_decay=1e-4, path_to_ckpt=None):
     ''' learning rate decay '''
 
     def adjust_learning_rate_1(optimizer, epoch):
@@ -317,9 +349,10 @@ def train_resnet(net, net_name, trainloader, epochs=200, resume_epoch=0, lr_base
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-    net = net.to(device)
     criterion = nn.MSELoss()
     optimizer_resnet = torch.optim.SGD(net.parameters(), lr=lr_base, momentum=0.9, weight_decay=weight_decay)
+    accelerator = get_accelerator()
+    net, optimizer_resnet, trainloader = accelerator.prepare(net, optimizer_resnet, trainloader)
 
     # resume training; load checkpoint
     if path_to_ckpt is not None and resume_epoch > 0:
@@ -337,8 +370,8 @@ def train_resnet(net, net_name, trainloader, epochs=200, resume_epoch=0, lr_base
         train_loss = 0
         adjust_learning_rate_1(optimizer_resnet, epoch)
         for _, (batch_train_images, batch_train_labels) in enumerate(trainloader):
-            batch_train_images = batch_train_images.type(torch.float).to(device)
-            batch_train_labels = batch_train_labels.type(torch.float).view(-1, 1).to(device)
+            batch_train_images = batch_train_images.type(torch.float)
+            batch_train_labels = batch_train_labels.type(torch.float).view(-1, 1)
 
             # Forward pass
             outputs, _ = net(batch_train_images)
@@ -346,19 +379,23 @@ def train_resnet(net, net_name, trainloader, epochs=200, resume_epoch=0, lr_base
 
             # backward pass
             optimizer_resnet.zero_grad()
-            loss.backward()
+            # loss.backward()
+            accelerator.backward(loss)
             optimizer_resnet.step()
+            accelerator.wait_for_everyone()
 
             train_loss += loss.cpu().item()
         # end for batch_idx
         train_loss = train_loss / len(trainloader)
 
-        print('Train {} for embedding: [epoch {}/{}] train_loss:{:.4f} Time:{:.4f}'.format(net_name, epoch + 1, epochs,
-                                                                                           train_loss,
-                                                                                           timeit.default_timer() - start_tmp))
+        accelerator.print(
+            'Train {} for embedding: [epoch {}/{}] train_loss:{:.4f} Time:{:.4f}'.format(net_name, epoch + 1, epochs,
+                                                                                         train_loss,
+                                                                                         timeit.default_timer() - start_tmp))
 
         # save checkpoint
-        if path_to_ckpt is not None and (((epoch + 1) % 50 == 0) or (epoch + 1 == epochs)):
+        if accelerator.is_main_process and (
+                path_to_ckpt is not None and (((epoch + 1) % 50 == 0) or (epoch + 1 == epochs))):
             save_file = path_to_ckpt + "/{}_ckpt_in_train/{}_checkpoint_epoch_{}.pth".format(net_name, net_name,
                                                                                              epoch + 1)
             os.makedirs(os.path.dirname(save_file), exist_ok=True)
@@ -389,10 +426,13 @@ class label_dataset(torch.utils.data.Dataset):
 
 
 def train_mlp(unique_labels_norm, model_mlp, model_name, model_h2y, epochs=500, lr_base=0.01, lr_decay_factor=0.1,
-              lr_decay_epochs=[150, 250, 350], weight_decay=1e-4, batch_size=128, device="cuda"):
+              lr_decay_epochs=[150, 250, 350], weight_decay=1e-4, batch_size=128):
     '''
     unique_labels_norm: an array of normalized unique labels
     '''
+
+    accelerator = get_accelerator()
+    device = accelerator.device
 
     model_mlp = model_mlp.to(device)
     model_h2y = model_h2y.to(device)
@@ -450,7 +490,7 @@ def train_mlp(unique_labels_norm, model_mlp, model_name, model_h2y, epochs=500, 
         # end for batch_idx
         train_loss = train_loss / len(trainloader)
 
-        print(
+        accelerator.print(
             '\n Train {}: [epoch {}/{}] train_loss:{:.4f} Time:{:.4f}'.format(model_name, epoch + 1, epochs, train_loss,
                                                                               timeit.default_timer() - start_tmp))
     # end for epoch
@@ -467,7 +507,7 @@ def train_mlp(unique_labels_norm, model_mlp, model_name, model_h2y, epochs=500, 
 
 #     from dataset import LoadDataSet
 
-#     file_path = 'C:/Users/DX/BaiduSyncdisk/Baidu_WD/datasets/CCGM_or_regression/RC-49'  
+#     file_path = 'C:/Users/DX/BaiduSyncdisk/Baidu_WD/datasets/CCGM_or_regression/RC-49'
 #     dataset = LoadDataSet(data_name="RC-49", data_path=file_path, min_label=0, max_label=90, img_size=64, max_num_img_per_label=25, num_img_per_label_after_replica=0)
 
 #     label_embedding = LabelEmbed(dataset=dataset, path_y2h="./output/model_y2h", path_y2cov="./output/model_y2cov", type="resnet")

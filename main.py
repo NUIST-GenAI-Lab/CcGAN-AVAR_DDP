@@ -1,20 +1,23 @@
-print("\n===================================================================================================")
-
 import os
 import timeit
 from datetime import datetime
 
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
+from torch.nn import SyncBatchNorm
 
 from dataset import LoadDataSet
 from evaluation.evaluator import Evaluator
+from ipc_util import register_signal_handler
 from label_embedding import LabelEmbed
 from models import sagan_generator, sagan_discriminator, sngan_generator, sngan_discriminator, biggan_generator, \
     biggan_discriminator, biggan_deep_generator, biggan_deep_discriminator, resnet18_aux_regre
 from opts import parse_opts
 from trainer import Trainer
 from utils import *
+
+accelerator.print(
+    "\n===================================================================================================")
 
 ##############################################
 ''' Settings '''
@@ -28,29 +31,32 @@ torch.backends.cudnn.deterministic = True
 cudnn.benchmark = False
 np.random.seed(args.seed)
 
+# after register this, you can send kill -10 or -12 to do sth (e.g. sample or save ckpt) instantly
+register_signal_handler()
+
+accelerator = init_accelerator(args)
+
 #######################################################################################
 '''                                Output folders                                  '''
 #######################################################################################
 path_to_output = os.path.join(args.root_path, 'output/{}_{}'.format(args.data_name, args.img_size))
-os.makedirs(path_to_output, exist_ok=True)
-
 save_setting_folder = os.path.join(path_to_output, "{}".format(args.setting_name))
-os.makedirs(save_setting_folder, exist_ok=True)
-
 setting_log_file = os.path.join(save_setting_folder, 'setting_info.txt')
-if not os.path.isfile(setting_log_file):
-    logging_file = open(setting_log_file, "w")
-    logging_file.close()
-with open(setting_log_file, 'a') as logging_file:
-    logging_file.write(
-        "\n===================================================================================================")
-    print(args, file=logging_file)
-
 save_results_folder = os.path.join(save_setting_folder, 'results')
-os.makedirs(save_results_folder, exist_ok=True)
-
 path_to_fake_data = os.path.join(save_results_folder, 'fake_data')
-os.makedirs(path_to_fake_data, exist_ok=True)
+if accelerator.is_main_process:
+    os.makedirs(path_to_output, exist_ok=True)
+    os.makedirs(save_setting_folder, exist_ok=True)
+    if not os.path.isfile(setting_log_file):
+        logging_file = open(setting_log_file, "w")
+        logging_file.close()
+    with open(setting_log_file, 'a') as logging_file:
+        logging_file.write(
+            "\n===================================================================================================")
+        accelerator.print(args, file=logging_file)
+    os.makedirs(save_results_folder, exist_ok=True)
+    os.makedirs(path_to_fake_data, exist_ok=True)
+accelerator.wait_for_everyone()
 
 #######################################################################################
 '''                                Make dataset                                     '''
@@ -77,9 +83,10 @@ if args.kernel_sigma < 0:
     std_label = np.std(train_labels_norm)
     args.kernel_sigma = 1.06 * std_label * (len(train_labels_norm)) ** (-1 / 5)
 
-    print("\n Use rule-of-thumb formula to compute kernel_sigma >>>")
-    print("\r The std of {} labels is {:.4f} so the kernel sigma is {:.4f}".format(len(train_labels_norm), std_label,
-                                                                                   args.kernel_sigma))
+    accelerator.print("\n Use rule-of-thumb formula to compute kernel_sigma >>>")
+    accelerator.print(
+        "\r The std of {} labels is {:.4f} so the kernel sigma is {:.4f}".format(len(train_labels_norm), std_label,
+                                                                                 args.kernel_sigma))
 ##end if
 
 if args.kappa < 0:
@@ -96,7 +103,7 @@ if args.kappa < 0:
         args.kappa = 1 / kappa_base ** 2
 ##end if
 
-print("\r Kappa:{:.4f}".format(args.kappa))
+accelerator.print("\r Kappa:{:.4f}".format(args.kappa))
 
 vicinal_params = {
     "kernel_sigma": args.kernel_sigma,
@@ -172,8 +179,13 @@ elif args.net_name.lower() == "dcgan":
 else:
     raise ValueError("Not Supported Network!")
 
-print('\r netG size:', get_parameter_number(netG))
-print('\r netD size:', get_parameter_number(netD))
+if accelerator.num_processes > 1:
+    accelerator.print("==================================== Use sync-bn ====================================")
+    netG = SyncBatchNorm.convert_sync_batchnorm(netG)
+    netD = SyncBatchNorm.convert_sync_batchnorm(netD)
+
+accelerator.print('\r netG size:', get_parameter_number(netG))
+accelerator.print('\r netD size:', get_parameter_number(netD))
 
 ## independent auxiliary regressor
 if args.use_aux_reg_model:
@@ -259,11 +271,11 @@ trainer = Trainer(
 )
 
 start = timeit.default_timer()
-print("\n")
-print("Begin Training:")
+accelerator.print("\n")
+accelerator.print("Begin Training:")
 trainer.train()
 stop = timeit.default_timer()
-print("End training; Time elapses: {}s. \n".format(stop - start))
+accelerator.print("End training; Time elapses: {}s. \n".format(stop - start))
 
 if args.do_dre_ft:
     trainer.finetune_cdre()
@@ -272,53 +284,56 @@ if args.do_dre_ft:
 '''                         Sampling and evaluation                                 '''
 #######################################################################################
 
+if accelerator.is_main_process:
 
-print("\n Start sampling fake images from the model >>>")
+    accelerator.print("\n Start sampling fake images from the model >>>")
 
-## initialize evaluator
-evaluator = Evaluator(dataset=dataset, trainer=trainer, args=args, device=trainer.device)  # , root_path=args.root_path
+    ## initialize evaluator
+    evaluator = Evaluator(dataset=dataset, trainer=trainer, args=args,
+                          device=trainer.device)  # , root_path=args.root_path
 
-## initialize evaluation models, prepare for evaluation
-if args.data_name in ["RC-49", "RC-49_imb"]:
-    eval_data_name = "RC49"
-else:
-    eval_data_name = args.data_name
-conduct_import_codes = "from evaluation.eval_models.{}.metrics_{}x{} import ResNet34_class_eval, ResNet34_regre_eval, encoder".format(
-    eval_data_name, args.img_size, args.img_size)
-print("\r" + conduct_import_codes)
-exec(conduct_import_codes)
-# for FID
-PreNetFID = encoder(dim_bottleneck=512)
-PreNetFID = nn.DataParallel(PreNetFID)
-# for Diversity
-if args.data_name in ["UTKFace", "RC-49", "RC-49_imb", "SteeringAngle"]:
-    PreNetDiversity = ResNet34_class_eval(num_classes=num_classes, ngpu=torch.cuda.device_count())
-else:
-    PreNetDiversity = None
-# for LS
-PreNetLS = ResNet34_regre_eval(ngpu=torch.cuda.device_count())
-
-## dump fake data in h5 files
-if args.dump_fake_for_h5:
-    path_to_h5files = os.path.join(path_to_fake_data, 'h5')
-    os.makedirs(path_to_h5files, exist_ok=True)
-    evaluator.dump_h5_files(output_path=path_to_h5files)
-
-## dump for niqe computation
-if args.dump_fake_for_niqe:
-    if args.niqe_dump_path == "None":
-        dump_fake_images_folder = os.path.join(path_to_fake_data, 'png')
+    ## initialize evaluation models, prepare for evaluation
+    if args.data_name in ["RC-49", "RC-49_imb"]:
+        eval_data_name = "RC49"
     else:
-        dump_fake_images_folder = args.niqe_dump_path + '/fake_images'
-    os.makedirs(dump_fake_images_folder, exist_ok=True)
-    evaluator.dump_png_images(output_path=dump_fake_images_folder)
+        eval_data_name = args.data_name
+    conduct_import_codes = "from evaluation.eval_models.{}.metrics_{}x{} import ResNet34_class_eval, ResNet34_regre_eval, encoder".format(
+        eval_data_name, args.img_size, args.img_size)
+    accelerator.print("\r" + conduct_import_codes)
+    exec(conduct_import_codes)
+    # for FID
+    PreNetFID = encoder(dim_bottleneck=512)
+    PreNetFID = nn.DataParallel(PreNetFID)
+    # for Diversity
+    if args.data_name in ["UTKFace", "RC-49", "RC-49_imb", "SteeringAngle"]:
+        PreNetDiversity = ResNet34_class_eval(num_classes=num_classes, ngpu=torch.cuda.device_count())
+    else:
+        PreNetDiversity = None
+    # for LS
+    PreNetLS = ResNet34_regre_eval(ngpu=torch.cuda.device_count())
 
-## start computing evaluation metrics
-if args.do_eval:
-    now = datetime.now()
-    time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
-    eval_results_path = os.path.join(save_setting_folder, "eval_{}".format(time_str))
-    os.makedirs(eval_results_path, exist_ok=True)
-    evaluator.compute_metrics(eval_results_path, PreNetFID, PreNetDiversity, PreNetLS)
+    ## dump fake data in h5 files
+    if args.dump_fake_for_h5:
+        path_to_h5files = os.path.join(path_to_fake_data, 'h5')
+        os.makedirs(path_to_h5files, exist_ok=True)
+        evaluator.dump_h5_files(output_path=path_to_h5files)
+
+    ## dump for niqe computation
+    if args.dump_fake_for_niqe:
+        if args.niqe_dump_path == "None":
+            dump_fake_images_folder = os.path.join(path_to_fake_data, 'png')
+        else:
+            dump_fake_images_folder = args.niqe_dump_path + '/fake_images'
+        os.makedirs(dump_fake_images_folder, exist_ok=True)
+        evaluator.dump_png_images(output_path=dump_fake_images_folder)
+
+    ## start computing evaluation metrics
+    if args.do_eval:
+        now = datetime.now()
+        time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+        eval_results_path = os.path.join(save_setting_folder, "eval_{}".format(time_str))
+        os.makedirs(eval_results_path, exist_ok=True)
+        evaluator.compute_metrics(eval_results_path, PreNetFID, PreNetDiversity, PreNetLS)
+accelerator.wait_for_everyone()
 
 print("\n===================================================================================================")
