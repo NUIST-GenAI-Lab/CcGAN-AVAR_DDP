@@ -1,23 +1,27 @@
 ## from https://github.com/lucidrains/ema-pytorch
 
 from __future__ import annotations
-from typing import Callable
 
 from copy import deepcopy
 from functools import partial
+from typing import Callable
 
 import torch
-from torch import nn, Tensor
+from torch import Tensor
 from torch.nn import Module
+
 
 def exists(val):
     return val is not None
 
+
 def divisible_by(num, den):
     return (num % den) == 0
 
+
 def get_module_device(m: Module):
     return next(m.parameters()).device
+
 
 def maybe_coerce_dtype(t, dtype):
     if t.dtype == dtype:
@@ -25,7 +29,8 @@ def maybe_coerce_dtype(t, dtype):
 
     return t.to(dtype)
 
-def inplace_copy(tgt: Tensor, src: Tensor, *, auto_move_device = False, coerce_dtype = False):
+
+def inplace_copy(tgt: Tensor, src: Tensor, *, auto_move_device=False, coerce_dtype=False):
     if auto_move_device:
         src = src.to(tgt.device)
 
@@ -34,7 +39,8 @@ def inplace_copy(tgt: Tensor, src: Tensor, *, auto_move_device = False, coerce_d
 
     tgt.copy_(src)
 
-def inplace_lerp(tgt: Tensor, src: Tensor, weight, *, auto_move_device = False, coerce_dtype = False):
+
+def inplace_lerp(tgt: Tensor, src: Tensor, weight, *, auto_move_device=False, coerce_dtype=False):
     if auto_move_device:
         src = src.to(tgt.device)
 
@@ -42,6 +48,7 @@ def inplace_lerp(tgt: Tensor, src: Tensor, weight, *, auto_move_device = False, 
         src = maybe_coerce_dtype(src, tgt.dtype)
 
     tgt.lerp_(src, weight)
+
 
 class EMA(Module):
     """
@@ -65,27 +72,31 @@ class EMA(Module):
     """
 
     def __init__(
-        self,
-        model: Module,
-        ema_model: Module | Callable[[], Module] | None = None,             # if your model has lazylinears or other types of non-deepcopyable modules, you can pass in your own ema model
-        beta = 0.9999,
-        update_after_step = 100,
-        update_every = 10,
-        inv_gamma = 1.0,
-        power = 2 / 3,
-        min_value = 0.0,
-        param_or_buffer_names_no_ema: set[str] = set(),
-        ignore_names: set[str] = set(),
-        ignore_startswith_names: set[str] = set(),
-        include_online_model = True,                  # set this to False if you do not wish for the online model to be saved along with the ema model (managed externally)
-        allow_different_devices = False,              # if the EMA model is on a different device (say CPU), automatically move the tensor
-        use_foreach = False,
-        update_model_with_ema_every = None,           # update the model with EMA model weights every number of steps, for better continual learning https://arxiv.org/abs/2406.02596
-        update_model_with_ema_beta = 0.,              # amount of model weight to keep when updating to EMA (hare to tortoise)
-        forward_method_names: tuple[str, ...] = (),
-        move_ema_to_online_device = False,
-        coerce_dtype = False,
-        lazy_init_ema = False,
+            self,
+            model: Module,
+            ema_model: Module | Callable[[], Module] | None = None,
+            # if your model has lazylinears or other types of non-deepcopyable modules, you can pass in your own ema model
+            beta=0.9999,
+            update_after_step=100,
+            update_every=10,
+            inv_gamma=1.0,
+            power=2 / 3,
+            min_value=0.0,
+            param_or_buffer_names_no_ema: set[str] = set(),
+            ignore_names: set[str] = set(),
+            ignore_startswith_names: set[str] = set(),
+            include_online_model=True,
+            # set this to False if you do not wish for the online model to be saved along with the ema model (managed externally)
+            allow_different_devices=False,
+            # if the EMA model is on a different device (say CPU), automatically move the tensor
+            use_foreach=False,
+            update_model_with_ema_every=None,
+            # update the model with EMA model weights every number of steps, for better continual learning https://arxiv.org/abs/2406.02596
+            update_model_with_ema_beta=0.,  # amount of model weight to keep when updating to EMA (hare to tortoise)
+            forward_method_names: tuple[str, ...] = (),
+            move_ema_to_online_device=False,
+            coerce_dtype=False,
+            lazy_init_ema=False,
     ):
         super().__init__()
         self.beta = beta
@@ -99,7 +110,7 @@ class EMA(Module):
         if include_online_model:
             self.online_model = model
         else:
-            self.online_model = [model] # hack
+            self.online_model = [model]  # hack
 
         # handle callable returning ema module
 
@@ -118,8 +129,8 @@ class EMA(Module):
 
         # tensor update functions
 
-        self.inplace_copy = partial(inplace_copy, auto_move_device = allow_different_devices, coerce_dtype = coerce_dtype)
-        self.inplace_lerp = partial(inplace_lerp, auto_move_device = allow_different_devices, coerce_dtype = coerce_dtype)
+        self.inplace_copy = partial(inplace_copy, auto_move_device=allow_different_devices, coerce_dtype=coerce_dtype)
+        self.inplace_lerp = partial(inplace_lerp, auto_move_device=allow_different_devices, coerce_dtype=coerce_dtype)
 
         # updating hyperparameters
 
@@ -131,7 +142,7 @@ class EMA(Module):
         self.min_value = min_value
 
         assert isinstance(param_or_buffer_names_no_ema, (set, list))
-        self.param_or_buffer_names_no_ema = param_or_buffer_names_no_ema # parameter or buffer
+        self.param_or_buffer_names_no_ema = param_or_buffer_names_no_ema  # parameter or buffer
 
         self.ignore_names = ignore_names
         self.ignore_startswith_names = ignore_startswith_names
@@ -156,7 +167,8 @@ class EMA(Module):
         # whether to use foreach
 
         if use_foreach:
-            assert hasattr(torch, '_foreach_lerp_') and hasattr(torch, '_foreach_copy_'), 'your version of torch does not have the prerequisite foreach functions'
+            assert hasattr(torch, '_foreach_lerp_') and hasattr(torch,
+                                                                '_foreach_copy_'), 'your version of torch does not have the prerequisite foreach functions'
 
         self.use_foreach = use_foreach
 
@@ -166,8 +178,8 @@ class EMA(Module):
         self.register_buffer('step', torch.tensor(0))
 
     def init_ema(
-        self,
-        ema_model: Module | None = None
+            self,
+            ema_model: Module | None = None
     ):
         self.ema_model = ema_model
 
@@ -190,8 +202,10 @@ class EMA(Module):
 
         # parameter and buffer names
 
-        self.parameter_names = {name for name, param in self.ema_model.named_parameters() if torch.is_floating_point(param) or torch.is_complex(param)}
-        self.buffer_names = {name for name, buffer in self.ema_model.named_buffers() if torch.is_floating_point(buffer) or torch.is_complex(buffer)}
+        self.parameter_names = {name for name, param in self.ema_model.named_parameters() if
+                                torch.is_floating_point(param) or torch.is_complex(param)}
+        self.buffer_names = {name for name, buffer in self.ema_model.named_buffers() if
+                             torch.is_floating_point(buffer) or torch.is_complex(buffer)}
 
     def add_to_optimizer_post_step_hook(self, optimizer):
         assert hasattr(optimizer, 'register_step_post_hook')
@@ -235,22 +249,26 @@ class EMA(Module):
     def copy_params_from_model_to_ema(self):
         copy = self.inplace_copy
 
-        for (_, ma_params), (_, current_params) in zip(self.get_params_iter(self.ema_model), self.get_params_iter(self.model)):
+        for (_, ma_params), (_, current_params) in zip(self.get_params_iter(self.ema_model),
+                                                       self.get_params_iter(self.model)):
             copy(ma_params.data, current_params.data)
 
-        for (_, ma_buffers), (_, current_buffers) in zip(self.get_buffers_iter(self.ema_model), self.get_buffers_iter(self.model)):
+        for (_, ma_buffers), (_, current_buffers) in zip(self.get_buffers_iter(self.ema_model),
+                                                         self.get_buffers_iter(self.model)):
             copy(ma_buffers.data, current_buffers.data)
 
     def copy_params_from_ema_to_model(self):
         copy = self.inplace_copy
 
-        for (_, ma_params), (_, current_params) in zip(self.get_params_iter(self.ema_model), self.get_params_iter(self.model)):
+        for (_, ma_params), (_, current_params) in zip(self.get_params_iter(self.ema_model),
+                                                       self.get_params_iter(self.model)):
             copy(current_params.data, ma_params.data)
 
-        for (_, ma_buffers), (_, current_buffers) in zip(self.get_buffers_iter(self.ema_model), self.get_buffers_iter(self.model)):
+        for (_, ma_buffers), (_, current_buffers) in zip(self.get_buffers_iter(self.ema_model),
+                                                         self.get_buffers_iter(self.model)):
             copy(current_buffers.data, ma_buffers.data)
 
-    def update_model_with_ema(self, decay = None):
+    def update_model_with_ema(self, decay=None):
         if not exists(decay):
             decay = self.update_model_with_ema_beta
 
@@ -260,13 +278,13 @@ class EMA(Module):
         self.update_moving_average(self.model, self.ema_model, decay)
 
     def get_current_decay(self):
-        epoch = (self.step - self.update_after_step - 1).clamp(min = 0.)
+        epoch = (self.step - self.update_after_step - 1).clamp(min=0.)
         value = 1 - (1 + epoch / self.inv_gamma) ** - self.power
 
         if epoch.item() <= 0:
             return 0.
 
-        return value.clamp(min = self.min_value, max = self.beta).item()
+        return value.clamp(min=self.min_value, max=self.beta).item()
 
     def update(self):
         step = self.step.item()
@@ -293,7 +311,7 @@ class EMA(Module):
             self.update_model_with_ema()
 
     @torch.no_grad()
-    def update_moving_average(self, ma_model, current_model, current_decay = None):
+    def update_moving_average(self, ma_model, current_model, current_decay=None):
         if self.is_frozen:
             return
 
@@ -314,7 +332,8 @@ class EMA(Module):
 
         # loop through parameters
 
-        for (name, current_params), (_, ma_params) in zip(self.get_params_iter(current_model), self.get_params_iter(ma_model)):
+        for (name, current_params), (_, ma_params) in zip(self.get_params_iter(current_model),
+                                                          self.get_params_iter(ma_model)):
             if name in self.ignore_names:
                 continue
 
@@ -329,7 +348,8 @@ class EMA(Module):
 
         # loop through buffers
 
-        for (name, current_buffer), (_, ma_buffer) in zip(self.get_buffers_iter(current_model), self.get_buffers_iter(ma_model)):
+        for (name, current_buffer), (_, ma_buffer) in zip(self.get_buffers_iter(current_model),
+                                                          self.get_buffers_iter(ma_model)):
             if name in self.ignore_names:
                 continue
 
