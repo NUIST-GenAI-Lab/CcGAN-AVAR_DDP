@@ -124,6 +124,8 @@ def parse_opts():
     parser.add_argument('--niqe_dump_path', type=str, default='None')
     parser.add_argument('--eval_batch_size', type=int, default=200)
 
+    parser.add_argument('--eval_only', action='store_true', default=False)
+
     args = parser.parse_args()
 
     return args
