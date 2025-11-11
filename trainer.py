@@ -1019,13 +1019,13 @@ class Trainer(object):
         for param in self.dre_net.dre_linear.parameters():
             param.requires_grad = True  # only train the dre linear branch
 
-        self.dre_accelerator = Accelerator(mixed_precision=self.mixed_precision_type if self.use_amp else "no")
+        self.accelerator = get_accelerator()
 
-        device = self.dre_accelerator.device
+        device = self.accelerator.device
 
         optDRE = torch.optim.Adam(self.dre_net.dre_linear.parameters(), lr=dre_ft_lr, weight_decay=1e-4)
 
-        self.dre_net, optDRE = self.dre_accelerator.prepare(self.dre_net, optDRE)
+        self.dre_net, optDRE = self.accelerator.prepare(self.dre_net, optDRE)
 
         path_to_ckpt = self.results_folder + "/ckpt_niter_{}_dre_niter_{}.pth".format(self.step, dre_ft_niters)
         self.accelerator.print("\n dre ckpt path:", path_to_ckpt)
@@ -1070,12 +1070,12 @@ class Trainer(object):
 
             dre_loss_val = dre_loss.item()
 
-            self.dre_accelerator.backward(dre_loss)
-            self.dre_accelerator.clip_grad_norm_(self.dre_net.dre_linear.parameters(), self.max_grad_norm)
-            self.dre_accelerator.wait_for_everyone()
+            self.accelerator.backward(dre_loss)
+            self.accelerator.clip_grad_norm_(self.dre_net.dre_linear.parameters(), self.max_grad_norm)
+            self.accelerator.wait_for_everyone()
             optDRE.step()
             optDRE.zero_grad()
-            self.dre_accelerator.wait_for_everyone()
+            self.accelerator.wait_for_everyone()
 
             self.accelerator.print(
                 "\n Step:{}/{}; Finetune DRE loss: {:.3f}; DR real: {:.3f}; DR fake: {:.3f}".format(step + 1,
@@ -1118,7 +1118,7 @@ class Trainer(object):
         assert labels.max().item() <= 1.0 and labels.min().item() >= 0  ##make sure all labels are normalized to [0,1]
 
         if self.ft_dre_flag:
-            device = self.dre_accelerator.device
+            device = self.accelerator.device
             dre_net = self.dre_net
         else:
             device = self.accelerator.device
