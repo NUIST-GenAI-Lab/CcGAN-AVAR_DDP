@@ -15,7 +15,6 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
 from accelerate.utils import set_seed
 from torchvision.utils import save_image
 
