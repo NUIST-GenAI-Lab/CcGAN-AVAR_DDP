@@ -4,6 +4,8 @@ import h5py
 import numpy as np
 from tqdm import trange
 
+from utils import get_accelerator
+
 
 class LoadDataSet:
     def __init__(self, data_name, data_path, min_label, max_label, img_size=64, max_num_img_per_label=1e30,
@@ -27,6 +29,7 @@ class LoadDataSet:
         self.max_num_img_per_label = max_num_img_per_label
         self.num_img_per_label_after_replica = num_img_per_label_after_replica
         self.imbalance_type = imbalance_type
+        self.accelerator = get_accelerator()
 
         ## load the entire dataset from h5 file
         with h5py.File(self.data_path + '/{}_{}x{}.h5'.format(self.data_name, self.img_size, self.img_size), 'r') as hf:
@@ -36,10 +39,10 @@ class LoadDataSet:
                 self.images_all = hf['images'][:]
                 self.indx_train = hf['indx_train'][:]
                 hf.close()
-                print("\n Loaded entire RC-49 dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
-                                                                           self.images_all.shape[1],
-                                                                           self.images_all.shape[2],
-                                                                           self.images_all.shape[3]))
+                self.accelerator.print("\n Loaded entire RC-49 dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
+                                                                                            self.images_all.shape[1],
+                                                                                            self.images_all.shape[2],
+                                                                                            self.images_all.shape[3]))
                 self.num_classes = 49
 
             elif self.data_name == "RC-49_imb":  # imbalanced RC-49 dataset
@@ -50,16 +53,17 @@ class LoadDataSet:
                 self.indx_train_trimodal = hf['indx_train_trimodal'][:]
                 self.indx_train_standard = hf['indx_train_standard'][:]
                 if self.imbalance_type.lower()[0:8] == "unimodal":
-                    print("We use `unimodal` index for training...\r")
+                    self.accelerator.print("We use `unimodal` index for training...\r")
                     self.indx_train = self.indx_train_unimodal
                 elif self.imbalance_type.lower()[0:9] == "dualmodal":
-                    print("We use `dualmodal` index for training...\r")
+                    self.accelerator.print("We use `dualmodal` index for training...\r")
                     self.indx_train = self.indx_train_dualmodal
                 elif self.imbalance_type.lower()[0:8] == "trimodal":
-                    print("We use `trimodal` index for training...\r")
+                    self.accelerator.print("We use `trimodal` index for training...\r")
                     self.indx_train = self.indx_train_trimodal
                 elif self.imbalance_type.lower()[0:8] == "standard":
-                    print("We use `standard` index for training...\r")  # similar to the training for CcGAN
+                    self.accelerator.print(
+                        "We use `standard` index for training...\r")  # similar to the training for CcGAN
                     self.indx_train = self.indx_train_standard
                 else:
                     self.indx_train = np.arange(len(self.images_all))
@@ -70,10 +74,10 @@ class LoadDataSet:
                 self.labels_all = hf['labels'][:].astype(float)
                 self.images_all = hf['images'][:]
                 hf.close()
-                print("\n Loaded entire UTKFace dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
-                                                                             self.images_all.shape[1],
-                                                                             self.images_all.shape[2],
-                                                                             self.images_all.shape[3]))
+                self.accelerator.print("\n Loaded entire UTKFace dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
+                                                                                              self.images_all.shape[1],
+                                                                                              self.images_all.shape[2],
+                                                                                              self.images_all.shape[3]))
                 self.num_classes = 5
 
             elif self.data_name == "Cell200":
@@ -81,10 +85,10 @@ class LoadDataSet:
                 self.labels_all = hf['CellCounts'][:].astype(float)
                 self.images_all = hf['IMGs_grey'][:]
                 hf.close()
-                print("\n Loaded entire Cell200 dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
-                                                                             self.images_all.shape[1],
-                                                                             self.images_all.shape[2],
-                                                                             self.images_all.shape[3]))
+                self.accelerator.print("\n Loaded entire Cell200 dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
+                                                                                              self.images_all.shape[1],
+                                                                                              self.images_all.shape[2],
+                                                                                              self.images_all.shape[3]))
                 self.num_classes = 0
 
             elif self.data_name == "SteeringAngle":
@@ -92,10 +96,11 @@ class LoadDataSet:
                 self.labels_all = hf['labels'][:].astype(float)
                 self.images_all = hf['images'][:]
                 hf.close()
-                print("\n Loaded entire SteeringAngle dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
-                                                                                   self.images_all.shape[1],
-                                                                                   self.images_all.shape[2],
-                                                                                   self.images_all.shape[3]))
+                self.accelerator.print(
+                    "\n Loaded entire SteeringAngle dataset: {}x{}x{}x{}".format(self.images_all.shape[0],
+                                                                                 self.images_all.shape[1],
+                                                                                 self.images_all.shape[2],
+                                                                                 self.images_all.shape[3]))
                 self.num_classes = 5
 
             else:
@@ -122,7 +127,7 @@ class LoadDataSet:
             images = images[indx]
 
             ## for each distinct label, take no more than max_num_img_per_label images
-            print(
+            self.accelerator.print(
                 "\n The original training set contains {} images with labels in [{},{}]; for each label, select no more than {} images.>>>".format(
                     len(images), self.min_label, self.max_label, self.max_num_img_per_label))
             sel_indx = []
@@ -138,14 +143,16 @@ class LoadDataSet:
             images = images[sel_indx]
             labels = labels[sel_indx]
 
-            print("\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
+            self.accelerator.print(
+                "\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
 
         elif self.data_name == "RC-49_imb":  # imbalanced RC-49 dataset
 
             images = self.images_all[self.indx_train]
             labels = self.labels_all[self.indx_train]
 
-            print("\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
+            self.accelerator.print(
+                "\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
 
         elif self.data_name == "UTKFace":
             ## Extract a subset from the entire dataset.
@@ -162,7 +169,7 @@ class LoadDataSet:
             labels = np.concatenate(labels)
 
             ## for each distinct label, take no more than max_num_img_per_label images
-            print(
+            self.accelerator.print(
                 "\n The original training set contains {} images with labels in [{},{}]; for each label, select no more than {} images.>>>".format(
                     len(images), self.min_label, self.max_label, self.max_num_img_per_label))
             sel_indx = []
@@ -178,7 +185,8 @@ class LoadDataSet:
             images = images[sel_indx]
             labels = labels[sel_indx]
 
-            print("\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
+            self.accelerator.print(
+                "\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
 
             ## replicate minority samples to alleviate the data imbalance issue
             max_num_img_per_label_after_replica = np.min(
@@ -186,7 +194,7 @@ class LoadDataSet:
             if max_num_img_per_label_after_replica > 1:
                 unique_labels_replica = np.sort(np.array(list(set(labels))))
                 num_labels_replicated = 0
-                print("\n Start replicating minority samples >>>")
+                self.accelerator.print("\n Start replicating minority samples >>>")
                 for i in trange(len(unique_labels_replica)):
                     curr_label = unique_labels_replica[i]
                     indx_i = np.where(labels == curr_label)[0]
@@ -203,7 +211,7 @@ class LoadDataSet:
                 # end for i
                 images = np.concatenate((images, images_replica), axis=0)
                 labels = np.concatenate((labels, labels_replica))
-                print("\r We replicate {} images and labels.".format(len(images_replica)))
+                self.accelerator.print("\r We replicate {} images and labels.".format(len(images_replica)))
 
         elif self.data_name == "Cell200":
             ## Extract a subset from the entire dataset.
@@ -220,7 +228,7 @@ class LoadDataSet:
             labels = np.concatenate(labels)
 
             # for each distinct label, take no more than max_num_img_per_label images
-            print(
+            self.accelerator.print(
                 "\n The original training set contains {} images with labels in [{},{}]; for each label, select no more than {} images.>>>".format(
                     len(images), self.min_label, self.max_label, self.max_num_img_per_label))
             step_size = 2
@@ -238,7 +246,8 @@ class LoadDataSet:
             images = np.concatenate(images_subset, axis=0)
             labels = np.concatenate(labels_subset)
 
-            print("\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
+            self.accelerator.print(
+                "\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
 
         elif self.data_name == "SteeringAngle":
             indx = np.where((self.labels_all > self.min_label) * (self.labels_all < self.max_label) == True)[0]
@@ -251,7 +260,7 @@ class LoadDataSet:
             if max_num_img_per_label_after_replica > 1:
                 unique_labels_replica = np.sort(np.array(list(set(labels))))
                 num_labels_replicated = 0
-                print("\n Start replicating monority samples >>>")
+                self.accelerator.print("\n Start replicating monority samples >>>")
                 for i in trange(len(unique_labels_replica)):
                     curr_label = unique_labels_replica[i]
                     indx_i = np.where(labels == curr_label)[0]
@@ -268,23 +277,26 @@ class LoadDataSet:
                 # end for i
                 images = np.concatenate((images, images_replica), axis=0)
                 labels = np.concatenate((labels, labels_replica))
-                print("\r We replicate {} images and labels.".format(len(images_replica)))
+                self.accelerator.print("\r We replicate {} images and labels.".format(len(images_replica)))
 
-            print("\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
+            self.accelerator.print(
+                "\r {} images left and there are {} unique labels".format(len(images), len(set(labels))))
 
         else:
             raise ValueError("Not Supported Dataset!")
 
         assert len(labels) == len(images)
 
-        print("\n The training set's dimension: {}x{}x{}x{}".format(images.shape[0], images.shape[1], images.shape[2],
-                                                                    images.shape[3]))
+        self.accelerator.print(
+            "\n The training set's dimension: {}x{}x{}x{}".format(images.shape[0], images.shape[1], images.shape[2],
+                                                                  images.shape[3]))
 
-        print("\r Range of unnormalized labels: ({},{})".format(np.min(labels), np.max(labels)))
+        self.accelerator.print("\r Range of unnormalized labels: ({},{})".format(np.min(labels), np.max(labels)))
 
         labels_norm = self.fn_normalize_labels(labels)
 
-        print("\r Range of normalized labels: ({},{})".format(np.min(labels_norm), np.max(labels_norm)))
+        self.accelerator.print(
+            "\r Range of normalized labels: ({},{})".format(np.min(labels_norm), np.max(labels_norm)))
 
         return images, labels, labels_norm
 
@@ -333,8 +345,8 @@ class LoadDataSet:
         else:
             raise ValueError("Not Supported Dataset!")
 
-        print("\n The evaluation set's dimension: {}x{}x{}x{}".format(images.shape[0], images.shape[1], images.shape[2],
-                                                                      images.shape[3]))
+        self.accelerator.print("\n The evaluation set's dimension: {}x{}x{}x{}"
+                               .format(images.shape[0], images.shape[1], images.shape[2], images.shape[3]))
 
         return images, labels, eval_labels
 
