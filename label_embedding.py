@@ -1,7 +1,7 @@
-import math
 import os
 import timeit
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -64,8 +64,12 @@ class LabelEmbed:
             ## training dataset
             train_images, _, train_labels = self.dataset.load_train_data()
             trainset = IMGs_dataset(train_images, train_labels, normalize=True)
-            # trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
-            trainloader = trainset.get_dataloader(batch_size=self.batch_size, shuffle=True)
+            trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True,
+                                                      num_workers=4,
+                                                      pin_memory=True,  # host→GPU
+                                                      prefetch_factor=4,  # prefetch 4 iter(batch)
+                                                      persistent_workers=True  # keep workers
+                                                      )
             unique_labels_norm = np.sort(np.array(list(set(train_labels))))
 
             ## training embedding network for y2h
@@ -183,8 +187,12 @@ class LabelEmbed:
             ## training dataset
             train_images, _, train_labels = self.dataset.load_train_data()
             trainset = IMGs_dataset(train_images, train_labels, normalize=True)
-            # trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True)
-            trainloader = trainset.get_dataloader(batch_size=self.batch_size, shuffle=True)
+            trainloader = torch.utils.data.DataLoader(trainset, batch_size=self.batch_size, shuffle=True,
+                                                      num_workers=4,
+                                                      pin_memory=True,  # host→GPU
+                                                      prefetch_factor=4,  # prefetch 4 iter(batch)
+                                                      persistent_workers=True  # keep workers
+                                                      )
             unique_labels_norm = np.sort(np.array(list(set(train_labels))))
 
             ## trainin embedding network for y2cov
@@ -454,7 +462,12 @@ def train_mlp(unique_labels_norm, model_mlp, model_name, model_h2y, epochs=500, 
 
     assert np.max(unique_labels_norm) <= 1 and np.min(unique_labels_norm) >= 0
     trainset = label_dataset(unique_labels_norm)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True,
+                                              num_workers=4,
+                                              pin_memory=True,  # host→GPU
+                                              prefetch_factor=4,  # prefetch 4 iter(batch)
+                                              persistent_workers=True  # keep workers
+                                              )
 
     model_h2y.eval()
     optimizer_mlp = torch.optim.SGD(model_mlp.parameters(), lr=lr_base, momentum=0.9, weight_decay=weight_decay)

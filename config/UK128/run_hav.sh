@@ -59,7 +59,7 @@ nohup setsid accelerate launch main.py \
     --do_eval \
     --samp_batch_size 200 --eval_batch_size 200 \
     "$@" \
-    >> "$LOGFILE" 2>&1 &
+    > "$LOGFILE" 2>&1 &
 
 PID=$!
 echo

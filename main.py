@@ -3,7 +3,6 @@ import timeit
 from datetime import datetime
 
 import torch.backends.cudnn as cudnn
-import torch.nn as nn
 from torch.nn import SyncBatchNorm
 
 from dataset import LoadDataSet
@@ -15,9 +14,6 @@ from models import sagan_generator, sagan_discriminator, sngan_generator, sngan_
 from opts import parse_opts
 from trainer import Trainer
 from utils import *
-
-accelerator.print(
-    "\n===================================================================================================")
 
 ##############################################
 ''' Settings '''
@@ -284,6 +280,8 @@ if args.do_dre_ft:
 '''                         Sampling and evaluation                                 '''
 #######################################################################################
 
+accelerator.wait_for_everyone()
+
 if accelerator.is_main_process:
 
     accelerator.print("\n Start sampling fake images from the model >>>")
@@ -303,7 +301,7 @@ if accelerator.is_main_process:
     exec(conduct_import_codes)
     # for FID
     PreNetFID = encoder(dim_bottleneck=512)
-    PreNetFID = nn.DataParallel(PreNetFID)
+    # PreNetFID = nn.DataParallel(PreNetFID)
     # for Diversity
     if args.data_name in ["UTKFace", "RC-49", "RC-49_imb", "SteeringAngle"]:
         PreNetDiversity = ResNet34_class_eval(num_classes=num_classes, ngpu=torch.cuda.device_count())
@@ -334,6 +332,25 @@ if accelerator.is_main_process:
         eval_results_path = os.path.join(save_setting_folder, "eval_{}".format(time_str))
         os.makedirs(eval_results_path, exist_ok=True)
         evaluator.compute_metrics(eval_results_path, PreNetFID, PreNetDiversity, PreNetLS)
-accelerator.wait_for_everyone()
+else:
+    # only main GPU do eval, just quit the work process in advance.
+    try:
+        del trainer
+    except:
+        pass
+    try:
+        del netG
+    except:
+        pass
+    try:
+        del netD
+    except:
+        pass
+    import torch
+
+    torch.cuda.empty_cache()
+    import sys
+
+    sys.exit(0)
 
 print("\n===================================================================================================")
