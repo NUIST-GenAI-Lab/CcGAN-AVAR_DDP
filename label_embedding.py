@@ -226,7 +226,7 @@ class LabelEmbed:
 
             if hasattr(model_resnet_y2cov, 'model') and hasattr(model_resnet_y2cov.model, 'h2y'):
                 model_h2y = model_resnet_y2cov.model.h2y
-            elif hasattr(model_resnet_y2h, 'h2y'):
+            elif hasattr(model_resnet_y2cov, 'h2y'):
                 model_h2y = model_resnet_y2cov.h2y
 
             # training (This step is easy and fast, so only the main process is used.)
